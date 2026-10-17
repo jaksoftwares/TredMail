@@ -1,0 +1,14 @@
+# Caddy Configuration for TredMail Production
+# Automatically provisions free, auto-renewing Let's Encrypt TLS certificates
+
+# 1. API & Tracking Gateway
+{$API_DOMAIN:api.tredmail.dovepeak.com}, {$TRACKING_DOMAIN:track.tredmail.dovepeak.com} {
+    reverse_proxy api:3000
+}
+
+# 2. Web Console Dashboard
+{$CONSOLE_DOMAIN:console.tredmail.dovepeak.com} {
+    root * /app/console/dist
+    file_server
+    try_files {path} /index.html
+}

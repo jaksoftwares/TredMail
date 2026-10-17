@@ -7,6 +7,8 @@ import {
   Send,
   ExternalLink,
   ShieldCheck,
+  ShieldAlert,
+  Webhook,
   ChevronRight,
 } from "lucide-react";
 import { Overview } from "./components/Overview";
@@ -14,9 +16,13 @@ import { Emails } from "./components/Emails";
 import { Domains } from "./components/Domains";
 import { ApiKeys } from "./components/ApiKeys";
 import { SendTest } from "./components/SendTest";
+import { Webhooks } from "./components/Webhooks";
+import { Suppressions } from "./components/Suppressions";
 
 export const App: React.FC = () => {
-  const [currentTab, setCurrentTab] = useState<"overview" | "emails" | "domains" | "keys" | "send">("overview");
+  const [currentTab, setCurrentTab] = useState<
+    "overview" | "emails" | "domains" | "keys" | "webhooks" | "suppressions" | "send"
+  >("overview");
   const [apiKey, setApiKey] = useState<string>("tred_live_b58745975c816f4589c9864087d3ac771eacb9adfd768cf9");
   const [inspectedEmailId, setInspectedEmailId] = useState<string | null>(null);
 
@@ -70,6 +76,22 @@ export const App: React.FC = () => {
           >
             <Key size={18} />
             <span>API Keys</span>
+          </div>
+
+          <div
+            className={`nav-item ${currentTab === "webhooks" ? "active" : ""}`}
+            onClick={() => setCurrentTab("webhooks")}
+          >
+            <Webhook size={18} />
+            <span>Webhooks</span>
+          </div>
+
+          <div
+            className={`nav-item ${currentTab === "suppressions" ? "active" : ""}`}
+            onClick={() => setCurrentTab("suppressions")}
+          >
+            <ShieldAlert size={18} />
+            <span>Suppressions</span>
           </div>
 
           <div
@@ -144,6 +166,10 @@ export const App: React.FC = () => {
           {currentTab === "keys" && (
             <ApiKeys apiKey={apiKey} onUpdateActiveKey={setApiKey} />
           )}
+
+          {currentTab === "webhooks" && <Webhooks apiKey={apiKey} />}
+
+          {currentTab === "suppressions" && <Suppressions apiKey={apiKey} />}
 
           {currentTab === "send" && (
             <SendTest apiKey={apiKey} onEmailSent={handleSelectEmail} />

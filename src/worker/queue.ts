@@ -6,6 +6,7 @@ import { prisma } from "../db/client.js";
 import { decryptSecret } from "../security/crypto.js";
 import { prepareEmailBody } from "./mime.js";
 import { env } from "../config/env.js";
+import { dispatchWebhookEvent } from "../webhooks/dispatcher.js";
 
 console.log("👷 Starting TredMail Email Delivery Worker...");
 
@@ -113,6 +114,16 @@ export const emailWorker = new Worker<EmailJobData>(
         },
       },
     });
+
+    // 8. Trigger Outbound Webhooks
+    dispatchWebhookEvent(data.organizationId, "email.delivered", {
+      email_id: data.emailId,
+      to: data.to,
+      from: data.from,
+      subject: data.subject,
+      smtp_response: info.response,
+      delivered_at: new Date().toISOString(),
+    }).catch(() => {});
 
     return { success: true, messageId: info.messageId, response: info.response };
   },
