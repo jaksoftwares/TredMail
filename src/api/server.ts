@@ -7,6 +7,9 @@ import { domainRoutes } from "./routes/domains.js";
 import { apiKeyRoutes } from "./routes/api-keys.js";
 import { statsRoutes } from "./routes/stats.js";
 import { trackingRoutes } from "./routes/tracking.js";
+import { webhookRoutes } from "./routes/webhooks.js";
+import { suppressionRoutes } from "./routes/suppressions.js";
+import { bounceRoutes } from "./routes/bounces.js";
 
 const fastify = Fastify({
   logger: {
@@ -42,6 +45,9 @@ async function main() {
   await fastify.register(domainRoutes, { prefix: "/v1/domains" });
   await fastify.register(apiKeyRoutes, { prefix: "/v1/api-keys" });
   await fastify.register(statsRoutes, { prefix: "/v1/stats" });
+  await fastify.register(webhookRoutes, { prefix: "/v1/webhooks" });
+  await fastify.register(suppressionRoutes, { prefix: "/v1/suppressions" });
+  await fastify.register(bounceRoutes, { prefix: "/v1/bounces" });
 
   // 5. Register Public Tracking Routes (No Auth required)
   await fastify.register(trackingRoutes, { prefix: "/v1/track" });
