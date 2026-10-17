@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  # Primary Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: tredmail-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: tredmail
+      POSTGRES_PASSWORD: tredmail_secret
+      POSTGRES_DB: tredmail_db
+    ports:
+      - "5435:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tredmail -d tredmail_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis for BullMQ Ingestion Queues & Rate Limiting
+  redis:
+    image: redis:7-alpine
+    container_name: tredmail-redis
+    restart: always
+    ports:
+      - "6389:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Mailpit: Local SMTP Test Server & Web Inspector (Catches all sent emails locally)
+  # Web UI accessible at http://localhost:8035
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: tredmail-mailpit
+    restart: always
+    ports:
+      - "1035:1025" # Inbound SMTP port
+      - "8035:8025" # Web Dashboard to view emails
+    environment:
+      MP_MAX_MESSAGES: 5000
+      MP_DATA_FILE: /data/mailpit.db
+    volumes:
+      - mailpit_data:/data
+
+volumes:
+  postgres_data:
+  redis_data:
+  mailpit_data:
