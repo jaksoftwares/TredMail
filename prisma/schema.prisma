@@ -77,9 +77,10 @@ model ApiKey {
   name           String
   keyPrefix      String    // e.g. "tred_live_a1b2..."
   keyHash        String    @unique // SHA-256 hash of the complete secret key
-  scopes         String[]  @default(["email:send", "domains:read"])
+  scopes         String[]  @default(["emails:send"])
   lastUsedAt     DateTime?
   expiresAt      DateTime?
+  revokedAt      DateTime? // Soft revocation keeps an audit trail
   createdAt      DateTime  @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -135,7 +136,8 @@ model Domain {
 enum EmailStatus {
   QUEUED
   SENDING
-  DELIVERED
+  SENT // Accepted by the outbound relay/MTA; final delivery not yet confirmed
+  DELIVERED // Confirmed accepted by the recipient's mail server
   FAILED
   BOUNCED
   COMPLAINED
@@ -181,6 +183,8 @@ model Email {
 enum EmailEventType {
   QUEUED
   SENT
+  DEFERRED // Temporary failure; will be retried
+  FAILED // Permanently failed after all retries
   DELIVERED
   OPENED
   CLICKED

@@ -69,7 +69,7 @@ export class TredMail {
         if (!response.ok) {
           return { error: json };
         }
-        return { data: json };
+        return { data: json as SendEmailResponse };
       } catch (err: any) {
         return { error: { message: err.message } };
       }

@@ -19,17 +19,68 @@ import { SendTest } from "./components/SendTest";
 import { Webhooks } from "./components/Webhooks";
 import { Suppressions } from "./components/Suppressions";
 
+const SESSION_KEY = "tredmail.apiKey";
+
+function readStoredKey(): string {
+  try {
+    return sessionStorage.getItem(SESSION_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<
     "overview" | "emails" | "domains" | "keys" | "webhooks" | "suppressions" | "send"
   >("overview");
-  const [apiKey, setApiKey] = useState<string>("tred_live_b58745975c816f4589c9864087d3ac771eacb9adfd768cf9");
+  // Interim access until console login lands (roadmap Phase 1): the key lives only in this
+  // browser tab's session storage and is never bundled into the app.
+  const [apiKey, setApiKeyState] = useState<string>(() => readStoredKey());
+  const [keyInput, setKeyInput] = useState("");
+  const setApiKey = (key: string) => {
+    try {
+      if (key) sessionStorage.setItem(SESSION_KEY, key);
+      else sessionStorage.removeItem(SESSION_KEY);
+    } catch {
+      // storage unavailable (private mode); keep the key in memory only
+    }
+    setApiKeyState(key);
+  };
   const [inspectedEmailId, setInspectedEmailId] = useState<string | null>(null);
 
   const handleSelectEmail = (id: string) => {
     setInspectedEmailId(id);
     setCurrentTab("emails");
   };
+
+  if (!apiKey) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}>
+        <form
+          className="card"
+          style={{ width: "100%", maxWidth: "440px", display: "flex", flexDirection: "column", gap: "16px", padding: "28px" }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (keyInput.trim()) setApiKey(keyInput.trim());
+          }}
+        >
+          <h1 style={{ fontSize: "1.3rem" }}>Connect to TredMail</h1>
+          <p style={{ color: "var(--text-secondary)", fontSize: "0.88rem" }}>
+            Paste an API key with the scopes you need. It is kept only for this browser tab and cleared when you close it.
+          </p>
+          <input
+            className="input"
+            type="password"
+            autoComplete="off"
+            placeholder="tred_live_..."
+            value={keyInput}
+            onChange={(e) => setKeyInput(e.target.value)}
+          />
+          <button className="btn btn-primary" type="submit">Connect</button>
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div className="app-layout">
@@ -104,6 +155,7 @@ export const App: React.FC = () => {
         </nav>
 
         <div className="sidebar-footer">
+          <button className="btn btn-secondary btn-sm" onClick={() => setApiKey("")}>Disconnect</button>
           <div className="status-indicator">
             <div className="status-dot"></div>
             <span>MTA Operational</span>

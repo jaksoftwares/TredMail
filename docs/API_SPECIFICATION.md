@@ -9,7 +9,7 @@ TredMail's REST API is designed for developer ergonomics and follows the modern 
 All requests must be made over **HTTPS**. Authenticate by providing your API key in the `Authorization` header with the `Bearer` scheme.
 
 ```http
-Authorization: Bearer tred_live_9a8b7c6d5e4f3a2b1c
+Authorization: Bearer tred_live_...
 ```
 
 * **Production Base URL**: `https://api.tredmail.dovepeak.com/v1`
@@ -339,7 +339,7 @@ send_email()
 ### 5.4 cURL
 ```bash
 curl -X POST "https://api.tredmail.dovepeak.com/v1/emails" \
-  -H "Authorization: Bearer tred_live_secret123" \
+  -H "Authorization: Bearer $TREDMAIL_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "from": "Dovepeak Team <hi@dovepeak.com>",

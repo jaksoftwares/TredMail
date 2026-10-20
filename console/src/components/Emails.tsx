@@ -119,7 +119,7 @@ export const Emails: React.FC<EmailsProps> = ({ apiKey, selectedEmailId, onClear
                   <td style={{ fontWeight: 600 }}>{e.to.join(", ")}</td>
                   <td style={{ color: "var(--text-secondary)" }}>{e.subject}</td>
                   <td>
-                    <span className={`badge ${e.status === "DELIVERED" ? "badge-success" : e.status === "QUEUED" ? "badge-info" : "badge-danger"}`}>
+                    <span className={`badge ${["SENT", "DELIVERED"].includes(e.status) ? "badge-success" : e.status === "QUEUED" ? "badge-info" : "badge-danger"}`}>
                       {e.status}
                     </span>
                   </td>

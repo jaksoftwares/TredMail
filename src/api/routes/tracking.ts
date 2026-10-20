@@ -1,85 +1,77 @@
-import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { prisma } from "../../db/client.js";
+import { env } from "../../config/env.js";
+import { createTrackingSigner } from "../../security/tracking-signature.js";
 
-// Standard 43-byte transparent 1x1 GIF binary
-const TRANSPARENT_1X1_GIF = Buffer.from(
-  "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
-  "base64"
-);
+// Standard 43-byte transparent 1x1 GIF
+const TRANSPARENT_1X1_GIF = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+
+const signer = createTrackingSigner(env.TREDMAIL_MASTER_ENCRYPTION_KEY);
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
 
 export async function trackingRoutes(fastify: FastifyInstance) {
-  // -------------------------------------------------------------
-  // GET /track/open/:emailId - 1x1 Transparent Tracking Pixel
-  // -------------------------------------------------------------
-  fastify.get("/open/:emailId", async (request: FastifyRequest<{ Params: { emailId: string } }>, reply: FastifyReply) => {
-    const { emailId } = request.params;
-    const ipAddress = request.ip || (request.headers["x-forwarded-for"] as string) || "127.0.0.1";
-    const userAgent = request.headers["user-agent"] || "Unknown";
-
-    // Asynchronously record the open event
-    prisma.emailEvent
-      .create({
-        data: {
-          emailId,
-          type: "OPENED",
-          ipAddress,
-          userAgent,
-        },
-      })
-      .catch((err) => {
-        console.warn(`Could not log open event for email ${emailId}:`, err.message);
-      });
-
-    // Return the transparent pixel immediately with cache busting headers
-    return reply
-      .header("Content-Type", "image/gif")
-      .header("Content-Length", TRANSPARENT_1X1_GIF.length.toString())
-      .header("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0")
-      .header("Pragma", "no-cache")
-      .header("Expires", "0")
-      .send(TRANSPARENT_1X1_GIF);
-  });
-
-  // -------------------------------------------------------------
-  // GET /track/click/:emailId?url=... - Link Click Redirect Proxy
-  // -------------------------------------------------------------
-  fastify.get(
-    "/click/:emailId",
-    async (
-      request: FastifyRequest<{
-        Params: { emailId: string };
-        Querystring: { url?: string };
-      }>,
-      reply: FastifyReply
-    ) => {
+  // GET /v1/track/open/:emailId?sig=... - 1x1 open-tracking pixel
+  fastify.get<{ Params: { emailId: string }; Querystring: { sig?: string } }>(
+    "/open/:emailId",
+    async (request, reply) => {
       const { emailId } = request.params;
-      const targetUrl = request.query.url;
-      const ipAddress = request.ip || (request.headers["x-forwarded-for"] as string) || "127.0.0.1";
-      const userAgent = request.headers["user-agent"] || "Unknown";
 
-      if (!targetUrl) {
-        return reply.status(400).send("Missing target URL parameter");
+      // Always return the pixel so images never render broken; only record signed opens.
+      if (signer.verifyOpen(emailId, request.query.sig)) {
+        prisma.emailEvent
+          .create({
+            data: {
+              emailId,
+              type: "OPENED",
+              ipAddress: request.ip,
+              userAgent: request.headers["user-agent"]?.slice(0, 512) ?? null,
+            },
+          })
+          .catch((err) => request.log.warn({ err, emailId }, "could not record open event"));
       }
 
-      const decodedUrl = decodeURIComponent(targetUrl);
+      return reply
+        .header("Content-Type", "image/gif")
+        .header("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0")
+        .header("Pragma", "no-cache")
+        .header("Expires", "0")
+        .send(TRANSPARENT_1X1_GIF);
+    }
+  );
 
-      // Record click event
+  // GET /v1/track/click/:emailId?url=...&sig=... - signed click redirect
+  fastify.get<{ Params: { emailId: string }; Querystring: { url?: string; sig?: string } }>(
+    "/click/:emailId",
+    async (request, reply) => {
+      const { emailId } = request.params;
+      const targetUrl = request.query.url;
+
+      // Fastify has already URL-decoded the query string; do not decode again.
+      if (!targetUrl || !isHttpUrl(targetUrl) || !signer.verifyClick(emailId, targetUrl, request.query.sig)) {
+        return reply.status(400).type("text/plain").send("This link is invalid or has been altered.");
+      }
+
       prisma.emailEvent
         .create({
           data: {
             emailId,
             type: "CLICKED",
-            ipAddress,
-            userAgent,
-            linkUrl: decodedUrl,
+            ipAddress: request.ip,
+            userAgent: request.headers["user-agent"]?.slice(0, 512) ?? null,
+            linkUrl: targetUrl,
           },
         })
-        .catch((err) => {
-          console.warn(`Could not log click event for email ${emailId}:`, err.message);
-        });
+        .catch((err) => request.log.warn({ err, emailId }, "could not record click event"));
 
-      // Redirect user to original target
-      return reply.redirect(302, decodedUrl);
+      return reply.redirect(targetUrl, 302);
     }
   );
 }

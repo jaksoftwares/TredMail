@@ -1,0 +1,24 @@
+# Secret scanning for TredMail. Runs in CI and as a pre-commit hook.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "tredmail-api-key"
+description = "TredMail API key"
+regex = '''tred_(live|test)_[0-9a-f]{48}'''
+tags = ["key", "tredmail"]
+
+[[rules]]
+id = "tredmail-webhook-secret"
+description = "TredMail webhook signing secret"
+regex = '''whsec_[A-Za-z0-9+/]{32}'''
+tags = ["key", "tredmail"]
+
+# The key leaked in these commits is revoked. Purging history rewrites this hash, making the
+# entry inert; delete it after the purge is pushed.
+[allowlist]
+description = "Known, revoked leak in the two commits before Phase 0"
+commits = [
+  "a9f985585c39c36ffce67d67b3a760232eb4b63c",
+  "3c57a7b152effb1213ebc86b51f2f92a28443e82",
+]
