@@ -1,7 +1,7 @@
 # -------------------------------------------------------------
 # Stage 1: Build Application & Console
 # -------------------------------------------------------------
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 
 WORKDIR /app
 
@@ -26,7 +26,7 @@ RUN cd console && npm run build
 # -------------------------------------------------------------
 # Stage 2: Production Lightweight Runtime
 # -------------------------------------------------------------
-FROM node:22-alpine AS runner
+FROM node:26-alpine AS runner
 
 WORKDIR /app
 
