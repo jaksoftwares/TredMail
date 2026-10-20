@@ -6,7 +6,8 @@
     "dev": "next dev -p 3010",
     "build": "next build",
     "start": "next start -p 3010",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "brand:assets": "node scripts/brand-assets.mjs"
   },
   "dependencies": {
     "better-auth": "^1.7.11",
@@ -23,6 +24,7 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "sharp": "0.35.5",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

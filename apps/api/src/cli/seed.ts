@@ -101,7 +101,7 @@ async function main() {
   console.log(`- platform workspace: ${platform.slug}`);
   await ensureDomain(platform.id, env.PRIMARY_DOMAIN.toLowerCase());
 
-  const dovepeak = await ensureWorkspace("dovepeak", "Dovepeak");
+  const dovepeak = await ensureWorkspace("dovepeak", "Dovepeak Technologies");
   console.log(`- workspace: ${dovepeak.slug}`);
   await ensureDomain(dovepeak.id, "dovepeak.com");
 

@@ -1,10 +1,10 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useLayoutEffect, useState, type ReactNode } from "react";
 import { ChevronsUpDown, Globe, KeyRound, LayoutDashboard, LogOut, Mail, Menu, Settings, ShieldBan, Webhook, X } from "lucide-react";
+import { ProductLockup } from "@/components/brand";
 import { authClient } from "@/lib/auth-client";
 import { useWorkspace } from "@/lib/workspace";
 
@@ -76,12 +76,8 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   return (
     <div className="flex h-full flex-col bg-navy px-3 py-4 text-offwhite">
-      <Link href="/overview" className="mb-5 flex items-center gap-2.5 px-2" onClick={onNavigate}>
-        <Image src="/brand/brandmark-on-dark.svg" alt="" width={30} height={32} priority />
-        <span className="leading-tight">
-          <span className="block text-lg font-extrabold tracking-tight">TredMail</span>
-          <span className="block text-[11px] text-navy-200">by Dovepeak</span>
-        </span>
+      <Link href="/overview" className="mb-5 px-2" onClick={onNavigate} aria-label="TredMail overview">
+        <ProductLockup onDark />
       </Link>
       <WorkspaceSwitcher />
       <nav className="mt-5 flex-1 space-y-0.5" aria-label="Main">
@@ -142,9 +138,8 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       <header className="flex items-center justify-between bg-navy px-4 py-3 lg:hidden">
-        <Link href="/overview" className="flex items-center gap-2 font-extrabold text-offwhite">
-          <Image src="/brand/brandmark-on-dark.svg" alt="" width={22} height={24} />
-          TredMail
+        <Link href="/overview" aria-label="TredMail overview">
+          <ProductLockup onDark compact />
         </Link>
         <button type="button" onClick={() => setMobileOpen(true)} className="text-offwhite" aria-label="Open menu">
           <Menu className="size-5" />

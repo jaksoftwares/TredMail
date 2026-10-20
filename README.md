@@ -1,12 +1,14 @@
-# TredMail 📨
+<p align="center"><img src="apps/console/public/brand/dovepeak-logo.svg" alt="Dovepeak Technologies" width="280"></p>
+
+# TredMail
 > **An Enterprise-Grade, Self-Hosted Transactional & Marketing Email Platform**  
-> *A Product of Dovepeak Technology*
+> *A product of Dovepeak Technologies*
 
 ---
 
 ## Executive Summary
 
-**TredMail** is Dovepeak’s in-house alternative to commercial mail delivery platforms like **Resend**, **Postmark**, and **SendGrid**. It provides developer-friendly REST APIs, instant domain verification (DKIM, SPF, DMARC), email delivery queues, live tracking (opens, clicks, bounces), webhooks, and a modern management console.
+**TredMail** is Dovepeak Technologies’ in-house alternative to commercial mail delivery platforms like **Resend**, **Postmark**, and **SendGrid**. It provides developer-friendly REST APIs, instant domain verification (DKIM, SPF, DMARC), email delivery queues, live tracking (opens, clicks, bounces), webhooks, and a modern management console.
 
 ### Key Objectives
 1. **Zero Recurring SaaS Tolls**: Eliminate per-email and tier-based recurring fees from 3rd-party email providers.
@@ -140,13 +142,13 @@ The complete technical blueprint is structured into the following deep-dive guid
 
 ## Quick Comparison: TredMail vs Commercial Providers
 
-| Feature | Resend / Postmark | SendGrid | TredMail (Dovepeak) |
+| Feature | Resend / Postmark | SendGrid | TredMail (Dovepeak Technologies) |
 | :--- | :--- | :--- | :--- |
 | **Pricing at 500k emails/mo** | ~$400 - $650 / month | ~$350 / month | **~$25 - $40 / month** (server costs only) |
 | **Pricing at 2M emails/mo** | ~$1,500+ / month | ~$1,000+ / month | **~$60 - $100 / month** |
 | **API Experience** | Excellent (Developer-first) | Legacy / Complex | **Identical to Resend** (modern REST + JSON) |
 | **Domain Verification** | Automatic DKIM/SPF UI | Manual / Clunky | **Instant Automated Verification UI** |
-| **Data Privacy & Control** | Stored on 3rd-party servers | Stored on 3rd-party servers | **100% Owned by Dovepeak** |
+| **Data Privacy & Control** | Stored on 3rd-party servers | Stored on 3rd-party servers | **100% Owned by Dovepeak Technologies** |
 | **Vendor Lock-in** | High | High | **Zero Lock-in** |
 | **Commercialization** | Cannot resell | Expensive partner tier | **Ready to white-label / monetize** |
 

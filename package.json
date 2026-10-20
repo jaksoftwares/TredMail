@@ -2,7 +2,7 @@
   "name": "tredmail",
   "version": "1.2.0",
   "private": true,
-  "description": "TredMail transactional email platform by Dovepeak",
+  "description": "TredMail transactional email platform by Dovepeak Technologies",
   "workspaces": [
     "packages/*",
     "apps/api",
@@ -45,6 +45,6 @@
   "engines": {
     "node": ">=22"
   },
-  "author": "Dovepeak",
+  "author": "Dovepeak Technologies",
   "license": "UNLICENSED"
 }

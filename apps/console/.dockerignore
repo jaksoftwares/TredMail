@@ -2,6 +2,4 @@ node_modules
 .next
 npm-debug.log*
 .env*
-
-
-remove all the default next assets , and adopt the appropriate branding assets. - strictly Dovepeak Technologies branding should be used.
+scripts

@@ -14,6 +14,9 @@ ENV NEXT_PUBLIC_GOOGLE_SIGN_IN=$NEXT_PUBLIC_GOOGLE_SIGN_IN
 # Fallback proxy target if requests reach Next instead of Caddy's /api and /v1 routes
 ARG TREDMAIL_API_INTERNAL_URL=http://api:3000
 ENV TREDMAIL_API_INTERNAL_URL=$TREDMAIL_API_INTERNAL_URL
+# Public console address; makes link-preview (Open Graph) image URLs absolute
+ARG CONSOLE_URL=http://localhost:3010
+ENV CONSOLE_URL=$CONSOLE_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 

@@ -90,6 +90,7 @@ services:
       context: apps/console
       args:
         NEXT_PUBLIC_GOOGLE_SIGN_IN: ${GOOGLE_SIGN_IN_ENABLED:-false}
+        CONSOLE_URL: https://${CONSOLE_DOMAIN}
     restart: always
     depends_on:
       api: { condition: service_healthy }
