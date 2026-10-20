@@ -42,8 +42,12 @@ export function decryptSecret(encryptedPayload: string): string {
   const key = getKey();
   const iv = Buffer.from(ivHex, "hex");
   const tag = Buffer.from(tagHex, "hex");
+  if (iv.length !== IV_LENGTH || tag.length !== TAG_LENGTH) {
+    throw new Error("Invalid encrypted payload: unexpected IV or auth tag length");
+  }
 
-  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+  // Pinning the tag length rejects truncated tags, which would make forgery easier.
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, { authTagLength: TAG_LENGTH });
   decipher.setAuthTag(tag);
 
   let decrypted = decipher.update(cipherText, "hex", "utf8");

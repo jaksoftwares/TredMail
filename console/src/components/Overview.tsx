@@ -3,11 +3,12 @@ import { Mail, CheckCircle2, Eye, MousePointerClick, AlertTriangle, ArrowUpRight
 
 interface Metrics {
   totalEmails: number;
+  acceptedCount: number;
   deliveredCount: number;
   bouncedCount: number;
-  openedEvents: number;
-  clickedEvents: number;
-  deliveryRate: string;
+  uniqueOpens: number;
+  uniqueClicks: number;
+  acceptedRate: string;
   openRate: string;
   clickRate: string;
   bounceRate: string;
@@ -88,14 +89,14 @@ export const Overview: React.FC<OverviewProps> = ({ apiKey, onSelectEmail }) => 
 
         <div className="metric-card">
           <div className="metric-header">
-            <span>Delivery Rate</span>
+            <span>Accepted by MTA</span>
             <CheckCircle2 size={16} color="var(--accent-success)" />
           </div>
           <div className="metric-value" style={{ color: "#34d399" }}>
-            {metrics?.deliveryRate ?? "100.0%"}
+            {metrics?.acceptedRate ?? "0.0%"}
           </div>
           <div className="metric-sub">
-            {metrics?.deliveredCount ?? 0} delivered
+            {metrics?.acceptedCount ?? 0} accepted ({metrics?.deliveredCount ?? 0} confirmed delivered)
           </div>
         </div>
 
@@ -108,7 +109,7 @@ export const Overview: React.FC<OverviewProps> = ({ apiKey, onSelectEmail }) => 
             {metrics?.openRate ?? "0.0%"}
           </div>
           <div className="metric-sub">
-            {metrics?.openedEvents ?? 0} opens tracked
+            {metrics?.uniqueOpens ?? 0} emails opened
           </div>
         </div>
 
@@ -215,7 +216,7 @@ export const Overview: React.FC<OverviewProps> = ({ apiKey, onSelectEmail }) => 
                     </td>
                     <td style={{ color: "var(--text-secondary)" }}>{email.subject}</td>
                     <td>
-                      <span className={`badge ${email.status === "DELIVERED" ? "badge-success" : email.status === "QUEUED" ? "badge-info" : "badge-danger"}`}>
+                      <span className={`badge ${["SENT", "DELIVERED"].includes(email.status) ? "badge-success" : email.status === "QUEUED" ? "badge-info" : "badge-danger"}`}>
                         {email.status}
                       </span>
                     </td>

@@ -1,0 +1,23 @@
+# Secret scanning for TredMail. Runs in CI on every pull request.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "tredmail-api-key"
+description = "TredMail API key"
+regex = '''tred_(live|test)_[0-9a-f]{48}'''
+tags = ["key", "tredmail"]
+
+[[rules]]
+id = "tredmail-webhook-secret"
+description = "TredMail webhook signing secret"
+regex = '''whsec_[A-Za-z0-9+/]{32}'''
+tags = ["key", "tredmail"]
+
+# Public placeholders that appear in older commits; none of them is a real secret.
+[allowlist]
+description = "Documented sample values"
+regexes = [
+  '''0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef''', # old .env.example sample key
+  '''tred_live_secret123''', # old API docs placeholder
+]

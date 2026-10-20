@@ -19,6 +19,20 @@ export interface DomainVerificationReport {
 }
 
 /**
+ * True when the SPF record contains exactly `include:<expectedInclude>` as one of its terms
+ * (qualifier allowed, case-insensitive). Substring matches such as `include:_spf.google.com`
+ * do not count.
+ */
+export function spfHasInclude(spfRecord: string, expectedInclude: string): boolean {
+  const target = `include:${expectedInclude.toLowerCase().replace(/\.$/, "")}`;
+  return spfRecord
+    .trim()
+    .split(/\s+/)
+    .slice(1)
+    .some((term) => term.toLowerCase().replace(/^[+?~-]/, "").replace(/\.$/, "") === target);
+}
+
+/**
  * Actively queries public DNS to verify SPF, DKIM, DMARC, and Return-Path CNAME.
  */
 export async function verifyDomainDns(
@@ -77,7 +91,7 @@ export async function verifyDomainDns(
     const spfRecord = joinedRecords.find((rec) => rec.startsWith("v=spf1"));
 
     if (spfRecord) {
-      const hasInclude = spfRecord.includes(expectedSpfInclude) || spfRecord.includes("include:_spf");
+      const hasInclude = spfHasInclude(spfRecord, expectedSpfInclude);
       results.push({
         recordType: "SPF",
         verified: hasInclude,

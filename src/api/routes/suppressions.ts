@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { prisma } from "../../db/client.js";
-import { authenticateApiKey } from "../middleware/auth.js";
+import { authenticateApiKey, requireScope } from "../middleware/auth.js";
 
 const createSuppressionSchema = z.object({
   email: z.string().email(),
@@ -11,6 +11,7 @@ const createSuppressionSchema = z.object({
 
 export async function suppressionRoutes(fastify: FastifyInstance) {
   fastify.addHook("preHandler", authenticateApiKey);
+  fastify.addHook("preHandler", requireScope("suppressions:manage"));
 
   // -------------------------------------------------------------
   // GET /v1/suppressions - List suppressed emails

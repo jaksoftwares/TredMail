@@ -1,164 +1,173 @@
-import { Worker, Job } from "bullmq";
+import { Worker, Job, UnrecoverableError } from "bullmq";
 import nodemailer from "nodemailer";
 import { redisConnection } from "../queue/redis.js";
 import { EMAIL_QUEUE_NAME, EmailJobData } from "../queue/email.queue.js";
 import { prisma } from "../db/client.js";
 import { decryptSecret } from "../security/crypto.js";
+import { createTrackingSigner } from "../security/tracking-signature.js";
 import { prepareEmailBody } from "./mime.js";
 import { env } from "../config/env.js";
 import { dispatchWebhookEvent } from "../webhooks/dispatcher.js";
 
-console.log("👷 Starting TredMail Email Delivery Worker...");
+const signer = createTrackingSigner(env.TREDMAIL_MASTER_ENCRYPTION_KEY);
 
-export const emailWorker = new Worker<EmailJobData>(
-  EMAIL_QUEUE_NAME,
-  async (job: Job<EmailJobData>) => {
-    const data = job.data;
-    console.log(`\n📨 Processing delivery job for email ID: ${data.emailId}`);
+// One pooled connection set per worker process; DKIM is applied per message.
+const transporter = nodemailer.createTransport({
+  pool: true,
+  maxConnections: 5,
+  host: env.SMTP_HOST,
+  port: env.SMTP_PORT,
+  secure: env.SMTP_SECURE,
+  ignoreTLS: env.NODE_ENV === "development" && !env.SMTP_SECURE,
+  auth: env.SMTP_USER ? { user: env.SMTP_USER, pass: env.SMTP_PASS } : undefined,
+  tls: { rejectUnauthorized: !env.SMTP_ALLOW_INVALID_CERTS },
+});
 
-    // 1. Fetch domain & decrypt DKIM private key
-    const domain = await prisma.domain.findUnique({
-      where: { id: data.domainId },
-    });
+const describe = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-    if (!domain) {
-      throw new Error(`Domain not found for ID: ${data.domainId}`);
-    }
+async function deliver(job: Job<EmailJobData>) {
+  const data = job.data;
 
-    let dkimPrivateKey: string | undefined;
-    try {
-      dkimPrivateKey = decryptSecret(domain.dkimPrivateKey);
-    } catch (err: any) {
-      console.warn(`⚠️ Could not decrypt DKIM key for domain ${domain.name}:`, err.message);
-    }
+  const domain = await prisma.domain.findUnique({ where: { id: data.domainId } });
+  if (!domain) {
+    throw new UnrecoverableError(`Domain ${data.domainId} no longer exists.`);
+  }
+  if (domain.status !== "VERIFIED") {
+    throw new UnrecoverableError(`Domain ${domain.name} is no longer verified.`);
+  }
 
-    // 2. Prepare HTML & tracking injection
-    const prepared = prepareEmailBody(data.emailId, data.html, data.text, {
-      trackOpens: data.trackOpens,
-      trackClicks: data.trackClicks,
-    });
+  // Never send unsigned mail: it would fail DMARC and damage the domain's reputation.
+  let dkimPrivateKey: string;
+  try {
+    dkimPrivateKey = decryptSecret(domain.dkimPrivateKey);
+  } catch (err) {
+    throw new UnrecoverableError(`Cannot decrypt DKIM key for ${domain.name}: ${describe(err)}`);
+  }
 
-    // 3. Configure Nodemailer Transporter with DKIM signing
-    const transporter = nodemailer.createTransport({
-      host: env.SMTP_HOST,
-      port: env.SMTP_PORT,
-      secure: env.SMTP_SECURE,
-      ignoreTLS: env.NODE_ENV === "development" && !env.SMTP_SECURE,
-      auth: env.SMTP_USER ? { user: env.SMTP_USER, pass: env.SMTP_PASS } : undefined,
-      tls: {
-        rejectUnauthorized: false, // Allows self-signed certificates in dev/local setups
-      },
-      // Cryptographic DKIM Signature
-      dkim: dkimPrivateKey
-        ? {
-            domainName: domain.name,
-            keySelector: domain.dkimSelector,
-            privateKey: dkimPrivateKey,
-            cacheDir: false,
-          }
-        : undefined,
-    });
+  await prisma.email.update({ where: { id: data.emailId }, data: { status: "SENDING" } });
 
-    // 4. Construct RFC-compliant headers
-    const messageId = `<${data.emailId}@mail.${domain.name}>`;
-    const mailOptions: nodemailer.SendMailOptions = {
-      from: data.from,
-      to: data.to,
-      cc: data.cc,
-      bcc: data.bcc,
-      replyTo: data.replyTo,
-      subject: data.subject,
-      html: prepared.html,
-      text: prepared.text,
-      messageId: messageId,
-      headers: {
-        ...data.headers,
-        "X-TredMail-ID": data.emailId,
-        "X-TredMail-Domain": domain.name,
-        // One-Click Unsubscribe Mandate (RFC 8058)
-        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-        "List-Unsubscribe": `<${env.API_BASE_URL}/unsubscribe/${data.emailId}>`,
-      },
-      attachments: data.attachments?.map((att) => ({
-        filename: att.filename,
-        content: Buffer.from(att.content, "base64"),
-        contentType: att.contentType,
-      })),
-    };
+  const prepared = prepareEmailBody(data.emailId, data.html, data.text, {
+    trackOpens: data.trackOpens,
+    trackClicks: data.trackClicks,
+    trackingBaseUrl: env.TRACKING_BASE_URL,
+    signer,
+  });
 
-    // 5. Send message over SMTP
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ SMTP Handshake Successful! Message ID: ${info.messageId}`);
-    console.log(`   Response: ${info.response}`);
+  const info = await transporter.sendMail({
+    from: data.from,
+    to: data.to,
+    cc: data.cc,
+    bcc: data.bcc,
+    replyTo: data.replyTo,
+    subject: data.subject,
+    html: prepared.html,
+    text: prepared.text,
+    messageId: `<${data.emailId}@${domain.name}>`,
+    headers: {
+      ...data.headers,
+      "X-TredMail-ID": data.emailId,
+    },
+    attachments: data.attachments?.map((att) => ({
+      filename: att.filename,
+      content: Buffer.from(att.content, "base64"),
+      contentType: att.contentType,
+    })),
+    dkim: {
+      domainName: domain.name,
+      keySelector: domain.dkimSelector,
+      privateKey: dkimPrivateKey,
+    },
+  });
 
-    // 6. Update database record to DELIVERED
-    await prisma.email.update({
+  // Accepted by the relay/MTA. DELIVERED is set only from MTA delivery logs (roadmap Phase 2).
+  const sentAt = new Date();
+  await prisma.$transaction([
+    prisma.email.update({
       where: { id: data.emailId },
-      data: {
-        status: "DELIVERED",
-        messageId: info.messageId,
-        smtpResponse: info.response,
-        deliveredAt: new Date(),
-      },
-    });
-
-    // 7. Log DELIVERED event
-    await prisma.emailEvent.create({
+      data: { status: "SENT", messageId: info.messageId, smtpResponse: info.response },
+    }),
+    prisma.emailEvent.create({
       data: {
         emailId: data.emailId,
-        type: "DELIVERED",
+        type: "SENT",
         details: {
           smtpResponse: info.response,
-          accepted: info.accepted,
-          rejected: info.rejected,
+          accepted: info.accepted.map(String),
+          rejected: info.rejected.map(String),
         },
       },
-    });
+    }),
+  ]);
 
-    // 8. Trigger Outbound Webhooks
-    dispatchWebhookEvent(data.organizationId, "email.delivered", {
-      email_id: data.emailId,
-      to: data.to,
-      from: data.from,
-      subject: data.subject,
-      smtp_response: info.response,
-      delivered_at: new Date().toISOString(),
-    }).catch(() => {});
+  dispatchWebhookEvent(data.organizationId, "email.sent", {
+    email_id: data.emailId,
+    to: data.to,
+    from: data.from,
+    subject: data.subject,
+    smtp_response: info.response,
+    sent_at: sentAt.toISOString(),
+  }).catch((err) => console.error("webhook dispatch failed", err));
 
-    return { success: true, messageId: info.messageId, response: info.response };
-  },
-  {
-    connection: redisConnection,
-    concurrency: 10, // Process 10 concurrent email deliveries
-  }
-);
+  return { messageId: info.messageId, response: info.response };
+}
+
+export const emailWorker = new Worker<EmailJobData>(EMAIL_QUEUE_NAME, deliver, {
+  connection: redisConnection,
+  concurrency: 10,
+});
 
 emailWorker.on("completed", (job) => {
-  console.log(`🎉 Job ${job.id} completed successfully.`);
+  console.log(`[worker] sent ${job.id}`);
 });
 
+// BullMQ emits "failed" on every failed attempt, including ones that will be retried.
 emailWorker.on("failed", async (job, err) => {
-  console.error(`❌ Job ${job?.id} failed with error:`, err.message);
+  if (!job?.data?.emailId) return;
 
-  if (job?.data?.emailId) {
-    await prisma.email.update({
-      where: { id: job.data.emailId },
-      data: {
-        status: "FAILED",
-        smtpResponse: err.message,
-      },
-    });
+  const maxAttempts = job.opts.attempts ?? 1;
+  const isFinal = err instanceof UnrecoverableError || job.attemptsMade >= maxAttempts;
+  const reason = describe(err);
 
-    await prisma.emailEvent.create({
-      data: {
-        emailId: job.data.emailId,
-        type: "BOUNCED",
-        bounceType: "SOFT",
-        details: {
-          error: err.message,
-          stack: err.stack,
+  try {
+    if (!isFinal) {
+      await prisma.emailEvent.create({
+        data: {
+          emailId: job.data.emailId,
+          type: "DEFERRED",
+          details: { attempt: job.attemptsMade, maxAttempts, error: reason },
         },
-      },
+      });
+      console.warn(`[worker] ${job.id} attempt ${job.attemptsMade}/${maxAttempts} failed: ${reason}`);
+      return;
+    }
+
+    await prisma.$transaction([
+      prisma.email.update({ where: { id: job.data.emailId }, data: { status: "FAILED", smtpResponse: reason } }),
+      prisma.emailEvent.create({
+        data: { emailId: job.data.emailId, type: "FAILED", details: { attempts: job.attemptsMade, error: reason } },
+      }),
+    ]);
+    console.error(`[worker] ${job.id} failed permanently: ${reason}`);
+
+    await dispatchWebhookEvent(job.data.organizationId, "email.failed", {
+      email_id: job.data.emailId,
+      to: job.data.to,
+      from: job.data.from,
+      subject: job.data.subject,
+      error: reason,
     });
+  } catch (recordErr) {
+    console.error(`[worker] could not record failure for ${job.id}`, recordErr);
   }
 });
+
+const shutdown = async () => {
+  await emailWorker.close();
+  transporter.close();
+  await Promise.allSettled([prisma.$disconnect(), redisConnection.quit()]);
+  process.exit(0);
+};
+process.on("SIGTERM", () => void shutdown());
+process.on("SIGINT", () => void shutdown());
+
+console.log(`[worker] TredMail delivery worker started (SMTP ${env.SMTP_HOST}:${env.SMTP_PORT})`);

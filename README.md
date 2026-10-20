@@ -125,15 +125,15 @@ flowchart TD
 
 The complete technical blueprint is structured into the following deep-dive guides:
 
-- 📑 [System Architecture & Stack Blueprint](file:///c:/Users/josep/TredMail/docs/ARCHITECTURE.md)
+- 📑 [System Architecture & Stack Blueprint](docs/ARCHITECTURE.md)
   * Detailed breakdown of components, MTA comparison (Postal vs KumoMTA vs SES Hybrid), queue design, and data flows.
-- 🔑 [API Specification & SDK Design](file:///c:/Users/josep/TredMail/docs/API_SPECIFICATION.md)
+- 🔑 [API Specification & SDK Design](docs/API_SPECIFICATION.md)
   * Resend-compatible REST API endpoints, request/response models, code examples (Node.js, Python, cURL), and error handling.
-- 🛡️ [Deliverability, Infrastructure & Compliance Guide](file:///c:/Users/josep/TredMail/docs/DELIVERABILITY_AND_INFRASTRUCTURE.md)
+- 🛡️ [Deliverability, Infrastructure & Compliance Guide](docs/DELIVERABILITY_AND_INFRASTRUCTURE.md)
   * Port 25 unblocking, rDNS setup, SPF/DKIM/DMARC generator algorithms, IP warmup schedules, and 2024+ Yahoo/Google rules.
-- 🗄️ [Database Schema (Prisma)](file:///c:/Users/josep/TredMail/docs/DATABASE_SCHEMA.prisma)
+- 🗄️ [Database Schema (Prisma)](prisma/schema.prisma)
   * Production-ready schema for Tenants, Users, Domains, API Keys, Messages, Delivery Events, Suppressions, and Webhooks.
-- 🚀 [Implementation Roadmap & Step-by-Step Build Plan](file:///c:/Users/josep/TredMail/docs/ROADMAP_AND_IMPLEMENTATION.md)
+- 🚀 [Implementation Roadmap & Step-by-Step Build Plan](docs/ROADMAP_AND_IMPLEMENTATION.md)
   * Phase-by-phase execution plan from local prototype to production cloud deployment.
 
 ---
@@ -152,6 +152,48 @@ The complete technical blueprint is structured into the following deep-dive guid
 
 ---
 
-## Getting Started
+## Getting Started (local development)
 
-To explore the setup and begin implementation, start with the **[Implementation Roadmap](file:///c:/Users/josep/TredMail/docs/ROADMAP_AND_IMPLEMENTATION.md)**.
+**Prerequisites:** Node.js 22+, Docker Desktop.
+
+1. **Configure.** Copy `.env.example` to `.env`, then set `TREDMAIL_MASTER_ENCRYPTION_KEY` and `INTERNAL_API_TOKEN` to the output of `openssl rand -hex 32`. Set `WEBHOOK_ALLOW_PRIVATE_TARGETS=true` if you want to test webhooks against `localhost`.
+2. **Start backing services** (PostgreSQL on 5435, Redis on 6389, Mailpit on 1035/8035):
+   ```bash
+   docker compose up -d
+   ```
+3. **Install, migrate and seed:**
+   ```bash
+   npm install && npm install --prefix console
+   npm run db:deploy
+   npm run db:seed        # prints a full-access API key ONCE; store it in a password manager
+   ```
+   In development the seed marks `dovepeak.com` as verified so mail can flow to Mailpit. Anywhere else the domain must pass real DNS verification.
+4. **Run everything:**
+   ```bash
+   npm run dev:all        # API :3000, worker, console :3001
+   ```
+
+| Service | URL |
+| --- | --- |
+| Console | http://localhost:3001 (paste your API key; it is kept only for the browser tab) |
+| Mailpit inbox | http://localhost:8035 |
+| API liveness / readiness | http://localhost:3000/health and /health/ready |
+
+### Checks
+
+```bash
+npm run typecheck && npm run lint && npm test     # what CI runs
+TREDMAIL_API_KEY=tred_live_... npm run test:smoke # full send -> worker -> Mailpit -> tracking round trip
+```
+
+### Security rules
+
+- Never commit API keys, webhook secrets or `.env`. CI runs gitleaks on every pull request.
+- API keys carry scopes (`emails:send`, `domains:manage`, `api_keys:manage`, `full_access`, ...). Give services the narrowest key that works.
+- If a key leaks: `npm run keys:revoke -- <key>` (or `node dist/cli/revoke-api-key.js <key>` in the production image), then issue a new one.
+
+### Production
+
+`deploy-hostinger.sh` provisions Docker, generates every secret, applies migrations and seeds the organization. Before relying on it, read the open items in the readiness report: the production stack does not yet include an MTA or bounce handling (roadmap Phase 2).
+
+See the **[Implementation Roadmap](docs/ROADMAP_AND_IMPLEMENTATION.md)** for the original build plan.

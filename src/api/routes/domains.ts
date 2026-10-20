@@ -5,7 +5,7 @@ import { generateDkimKeypair } from "../../security/dkim-keys.js";
 import { encryptSecret } from "../../security/crypto.js";
 import { generateExpectedDnsRecords } from "../../dns/generator.js";
 import { verifyDomainDns } from "../../dns/verifier.js";
-import { authenticateApiKey } from "../middleware/auth.js";
+import { authenticateApiKey, requireScope } from "../middleware/auth.js";
 import { env } from "../../config/env.js";
 
 const createDomainSchema = z.object({
@@ -19,7 +19,7 @@ export async function domainRoutes(fastify: FastifyInstance) {
   // -------------------------------------------------------------
   // GET /v1/domains - List domains
   // -------------------------------------------------------------
-  fastify.get("/", async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get("/", { preHandler: requireScope("domains:read") }, async (request: FastifyRequest, reply: FastifyReply) => {
     const domains = await prisma.domain.findMany({
       where: { organizationId: request.organization!.id },
       orderBy: { createdAt: "desc" },
@@ -40,7 +40,7 @@ export async function domainRoutes(fastify: FastifyInstance) {
   // -------------------------------------------------------------
   // POST /v1/domains - Register domain
   // -------------------------------------------------------------
-  fastify.post("/", async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.post("/", { preHandler: requireScope("domains:manage") }, async (request: FastifyRequest, reply: FastifyReply) => {
     const parseResult = createDomainSchema.safeParse(request.body);
     if (!parseResult.success) {
       return reply.status(400).send({
@@ -106,7 +106,7 @@ export async function domainRoutes(fastify: FastifyInstance) {
   // -------------------------------------------------------------
   // POST /v1/domains/:id/verify - Actively verify DNS records
   // -------------------------------------------------------------
-  fastify.post("/:id/verify", async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+  fastify.post<{ Params: { id: string } }>("/:id/verify", { preHandler: requireScope("domains:manage") }, async (request, reply) => {
     const { id } = request.params;
     const orgId = request.organization!.id;
 
