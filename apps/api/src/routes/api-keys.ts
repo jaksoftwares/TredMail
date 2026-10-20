@@ -3,7 +3,8 @@ import { z } from "zod";
 import { prisma } from "@tredmail/db";
 import { generateApiKey } from "@tredmail/core/security/api-keys";
 import { API_SCOPES, DEFAULT_KEY_SCOPES, canGrantScopes } from "@tredmail/core/security/scopes";
-import { authenticateApiKey, requireScope } from "../middleware/auth.js";
+import { auditActor, authenticate, requireScope } from "../middleware/auth.js";
+import { recordAudit } from "@tredmail/core/services/audit";
 
 const createKeySchema = z.object({
   name: z.string().trim().min(1).max(50),
@@ -12,7 +13,7 @@ const createKeySchema = z.object({
 });
 
 export async function apiKeyRoutes(fastify: FastifyInstance) {
-  fastify.addHook("preHandler", authenticateApiKey);
+  fastify.addHook("preHandler", authenticate);
   fastify.addHook("preHandler", requireScope("api_keys:manage"));
 
   // GET /v1/api-keys - List API keys (never returns secrets)
@@ -49,7 +50,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance) {
 
     const { name, scopes, expires_at } = parseResult.data;
 
-    if (!canGrantScopes(request.apiKey!.scopes, scopes)) {
+    if (!canGrantScopes(request.principal!.scopes, scopes)) {
       return reply.status(403).send({
         statusCode: 403,
         error: "insufficient_scope",
@@ -78,6 +79,16 @@ export async function apiKeyRoutes(fastify: FastifyInstance) {
       },
     });
 
+    await recordAudit({
+      organizationId: request.organization!.id,
+      ...auditActor(request),
+      action: "api_key.created",
+      targetType: "api_key",
+      targetId: apiKey.id,
+      metadata: { name, scopes, keyPrefix: key.keyPrefix },
+      ipAddress: request.ip,
+    });
+
     return reply.status(201).send({
       id: apiKey.id,
       name: apiKey.name,
@@ -99,6 +110,15 @@ export async function apiKeyRoutes(fastify: FastifyInstance) {
     }
 
     await prisma.apiKey.update({ where: { id: key.id }, data: { revokedAt: new Date() } });
+    await recordAudit({
+      organizationId: request.organization!.id,
+      ...auditActor(request),
+      action: "api_key.revoked",
+      targetType: "api_key",
+      targetId: key.id,
+      metadata: { name: key.name, keyPrefix: key.keyPrefix },
+      ipAddress: request.ip,
+    });
 
     return reply.status(200).send({ success: true, message: "API key revoked." });
   });

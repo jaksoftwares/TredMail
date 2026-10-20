@@ -2,3 +2,4 @@
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL ??= "postgresql://test:test@localhost:5432/test";
 process.env.TREDMAIL_MASTER_ENCRYPTION_KEY ??= "a".repeat(64);
+process.env.BETTER_AUTH_SECRET ??= "b".repeat(64);

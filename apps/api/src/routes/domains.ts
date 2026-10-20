@@ -5,7 +5,8 @@ import { generateDkimKeypair } from "@tredmail/core/security/dkim-keys";
 import { encryptSecret } from "@tredmail/core/security/crypto";
 import { generateExpectedDnsRecords } from "@tredmail/core/dns/generator";
 import { verifyDomainDns } from "@tredmail/core/dns/verifier";
-import { authenticateApiKey, requireScope } from "../middleware/auth.js";
+import { auditActor, authenticate, requireScope } from "../middleware/auth.js";
+import { recordAudit } from "@tredmail/core/services/audit";
 import { env } from "@tredmail/core/config/env";
 
 const createDomainSchema = z.object({
@@ -14,7 +15,7 @@ const createDomainSchema = z.object({
 });
 
 export async function domainRoutes(fastify: FastifyInstance) {
-  fastify.addHook("preHandler", authenticateApiKey);
+  fastify.addHook("preHandler", authenticate);
 
   // -------------------------------------------------------------
   // GET /v1/domains - List domains
@@ -53,6 +54,15 @@ export async function domainRoutes(fastify: FastifyInstance) {
 
     const { name, region } = parseResult.data;
     const cleanName = name.toLowerCase().trim();
+    const platformDomain = env.PRIMARY_DOMAIN.toLowerCase();
+
+    if (cleanName === platformDomain || cleanName.endsWith(`.${platformDomain}`)) {
+      return reply.status(422).send({
+        statusCode: 422,
+        error: "reserved_domain",
+        message: `'${cleanName}' is reserved by TredMail. Use the sandbox sender or add your own domain.`,
+      });
+    }
     const orgId = request.organization!.id;
 
     // Check if domain already registered under this organization
@@ -94,6 +104,16 @@ export async function domainRoutes(fastify: FastifyInstance) {
       domain.dkimPublicKey
     );
 
+    await recordAudit({
+      organizationId: orgId,
+      ...auditActor(request),
+      action: "domain.created",
+      targetType: "domain",
+      targetId: domain.id,
+      metadata: { name: domain.name },
+      ipAddress: request.ip,
+    });
+
     return reply.status(201).send({
       id: domain.id,
       name: domain.name,
@@ -131,7 +151,33 @@ export async function domainRoutes(fastify: FastifyInstance) {
       env.BOUNCE_DOMAIN
     );
 
+    // A domain can be verified (and therefore sent from) by only one workspace.
+    if (report.isFullyVerified) {
+      const ownedElsewhere = await prisma.domain.findFirst({
+        where: { name: domain.name, status: "VERIFIED", organizationId: { not: orgId } },
+        select: { id: true },
+      });
+      if (ownedElsewhere) {
+        return reply.status(409).send({
+          statusCode: 409,
+          error: "domain_owned_elsewhere",
+          message: `'${domain.name}' is already verified by another TredMail workspace. Contact support if you own it.`,
+        });
+      }
+    }
+
     const newStatus = report.isFullyVerified ? "VERIFIED" : domain.status;
+    if (newStatus === "VERIFIED" && domain.status !== "VERIFIED") {
+      await recordAudit({
+        organizationId: orgId,
+        ...auditActor(request),
+        action: "domain.verified",
+        targetType: "domain",
+        targetId: domain.id,
+        metadata: { name: domain.name },
+        ipAddress: request.ip,
+      });
+    }
 
     await prisma.domain.update({
       where: { id: domain.id },

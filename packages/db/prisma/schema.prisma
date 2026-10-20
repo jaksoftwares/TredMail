@@ -22,39 +22,118 @@ enum OrganizationRole {
 }
 
 model Organization {
-  id          String   @id @default(cuid())
-  name        String
-  slug        String   @unique
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  // Commercial / Quota Fields (Seamless transition to SaaS)
-  isCommercial Boolean  @default(false)
-  planTier     String   @default("unlimited_internal") // "unlimited_internal" or "pro", "enterprise"
-  monthlyQuota Int      @default(0) // 0 = unlimited
+  // Collected at workspace creation; used for sending-limit review
+  useCase String?
+  website String?
+
+  // Plan and quota. New workspaces start on the free plan; Dovepeak's own workspace is
+  // seeded as "unlimited_internal". Enforcement arrives with billing (roadmap Phase 4).
+  isCommercial Boolean @default(true)
+  planTier     String  @default("free") // "free" | "pro" | "scale" | "enterprise" | "unlimited_internal"
+  monthlyQuota Int     @default(3000) // 0 = unlimited
 
   // Relations
-  members       OrganizationMember[]
-  domains       Domain[]
-  apiKeys       ApiKey[]
-  emails        Email[]
-  suppressions  Suppression[]
-  webhooks      Webhook[]
+  members      OrganizationMember[]
+  invitations  Invitation[]
+  auditLogs    AuditLog[]
+  domains      Domain[]
+  apiKeys      ApiKey[]
+  emails       Email[]
+  suppressions Suppression[]
+  webhooks     Webhook[]
 
   @@map("organizations")
 }
 
+// Identity tables below follow Better Auth's schema (users, sessions, accounts,
+// verifications, two-factor). Passwords live in accounts.password, hashed by Better Auth.
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  passwordHash String
-  name         String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id               String   @id @default(cuid())
+  email            String   @unique
+  name             String
+  emailVerified    Boolean  @default(false)
+  image            String?
+  twoFactorEnabled Boolean? @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  memberships OrganizationMember[]
+  memberships     OrganizationMember[]
+  sessions        Session[]
+  accounts        Account[]
+  twoFactors      TwoFactor[]
+  invitationsSent Invitation[]
 
   @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  accessToken           String?   @db.Text
+  refreshToken          String?   @db.Text
+  idToken               String?   @db.Text
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String   @db.Text
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now()) @updatedAt
+
+  @@index([identifier])
+  @@map("verifications")
+}
+
+model TwoFactor {
+  id                      String    @id @default(cuid())
+  secret                  String
+  backupCodes             String    @db.Text
+  userId                  String
+  verified                Boolean?  @default(false)
+  failedVerificationCount Int?      @default(0)
+  lockedUntil             DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("two_factors")
 }
 
 model OrganizationMember {
@@ -68,14 +147,54 @@ model OrganizationMember {
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([organizationId, userId])
+  @@index([userId])
   @@map("organization_members")
+}
+
+model Invitation {
+  id             String           @id @default(cuid())
+  organizationId String
+  email          String
+  role           OrganizationRole @default(DEVELOPER)
+  tokenHash      String           @unique // SHA-256 of the token in the invitation link
+  invitedById    String?
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedBy    User?        @relation(fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([email])
+  @@map("invitations")
+}
+
+// Who changed what in a workspace: keys, domains, members, webhooks, settings.
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  actorType      String // "user" | "api_key" | "system"
+  actorId        String?
+  action         String // e.g. "api_key.created", "member.role_changed"
+  targetType     String?
+  targetId       String?
+  metadata       Json?
+  ipAddress      String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@map("audit_logs")
 }
 
 model ApiKey {
   id             String    @id @default(cuid())
   organizationId String
   name           String
-  keyPrefix      String    // e.g. "tred_live_a1b2..."
+  keyPrefix      String // e.g. "tred_live_a1b2..."
   keyHash        String    @unique // SHA-256 hash of the complete secret key
   scopes         String[]  @default(["emails:send"])
   lastUsedAt     DateTime?
@@ -103,14 +222,14 @@ enum DomainStatus {
 model Domain {
   id             String       @id @default(cuid())
   organizationId String
-  name           String       // e.g. "dovepeak.com"
+  name           String // e.g. "dovepeak.com"
   status         DomainStatus @default(PENDING)
   region         String       @default("eu-central")
 
   // DKIM Cryptographic Keypair
-  dkimSelector   String       @default("tredmail")
-  dkimPublicKey  String       @db.Text
-  dkimPrivateKey String       @db.Text // Encrypted using AES-256-GCM
+  dkimSelector   String @default("tredmail")
+  dkimPublicKey  String @db.Text
+  dkimPrivateKey String @db.Text // Encrypted using AES-256-GCM
 
   // DNS Verification Flags
   spfVerified        Boolean   @default(false)
@@ -164,8 +283,8 @@ model Email {
   status         EmailStatus @default(QUEUED)
   messageId      String?     @unique // Unique RFC 5322 Message-ID
   smtpResponse   String?     @db.Text
-  metadata       Json?       // Custom developer metadata
-  tags           Json?       // Categorization tags
+  metadata       Json? // Custom developer metadata
+  tags           Json? // Categorization tags
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -193,15 +312,15 @@ enum EmailEventType {
 }
 
 model EmailEvent {
-  id          String         @id @default(cuid())
-  emailId     String
-  type        EmailEventType
-  timestamp   DateTime       @default(now())
-  ipAddress   String?
-  userAgent   String?
-  linkUrl     String?        // Target URL if type is CLICKED
-  bounceType  BounceType?
-  details     Json?          // Raw diagnostic / DSN / SMTP payload
+  id         String         @id @default(cuid())
+  emailId    String
+  type       EmailEventType
+  timestamp  DateTime       @default(now())
+  ipAddress  String?
+  userAgent  String?
+  linkUrl    String? // Target URL if type is CLICKED
+  bounceType BounceType?
+  details    Json? // Raw diagnostic / DSN / SMTP payload
 
   email Email @relation(fields: [emailId], references: [id], onDelete: Cascade)
 
@@ -243,7 +362,7 @@ model Webhook {
   id             String   @id @default(cuid())
   organizationId String
   url            String
-  secret         String   // Shared secret for HMAC-SHA256 signature verification
+  secret         String // Shared secret for HMAC-SHA256 signature verification
   subscribedTo   String[] // ["email.delivered", "email.bounced", etc.]
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())

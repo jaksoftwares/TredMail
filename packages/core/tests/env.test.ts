@@ -4,6 +4,7 @@ import { loadEnv } from "../src/config/env.js";
 const base = {
   DATABASE_URL: "postgresql://x",
   TREDMAIL_MASTER_ENCRYPTION_KEY: "d".repeat(64),
+  BETTER_AUTH_SECRET: "s".repeat(64),
 };
 
 function configError(source: NodeJS.ProcessEnv): string {

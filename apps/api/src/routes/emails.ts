@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { prisma } from "@tredmail/db";
-import { authenticateApiKey, requireScope } from "../middleware/auth.js";
+import { authenticate, requireScope } from "../middleware/auth.js";
 import { acceptEmail, sendEmailSchema } from "@tredmail/core/services/email-service";
 
 const batchSchema = z.array(sendEmailSchema).min(1).max(100);
@@ -32,7 +32,7 @@ export async function sendBatch(request: FastifyRequest, reply: FastifyReply) {
 }
 
 export async function emailRoutes(fastify: FastifyInstance) {
-  fastify.addHook("preHandler", authenticateApiKey);
+  fastify.addHook("preHandler", authenticate);
 
   // POST /v1/emails - Send a single email (Resend-compatible payload)
   fastify.post("/", { preHandler: requireScope("emails:send") }, async (request, reply) => {

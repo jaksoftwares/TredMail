@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { prisma } from "@tredmail/db";
-import { authenticateApiKey, requireScope } from "../middleware/auth.js";
+import { authenticate, requireScope } from "../middleware/auth.js";
 
 const createSuppressionSchema = z.object({
   email: z.string().email(),
@@ -10,7 +10,7 @@ const createSuppressionSchema = z.object({
 });
 
 export async function suppressionRoutes(fastify: FastifyInstance) {
-  fastify.addHook("preHandler", authenticateApiKey);
+  fastify.addHook("preHandler", authenticate);
   fastify.addHook("preHandler", requireScope("suppressions:manage"));
 
   // -------------------------------------------------------------

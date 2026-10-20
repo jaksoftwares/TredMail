@@ -28,6 +28,14 @@ const envSchema = z
       .string()
       .regex(/^[0-9a-fA-F]{64}$/, "must be 64 hex characters (openssl rand -hex 32)"),
 
+    // Signs and encrypts console sessions (Better Auth). openssl rand -hex 32
+    BETTER_AUTH_SECRET: z.string().min(32, "must be at least 32 characters (openssl rand -hex 32)"),
+    // Optional Google sign-in; both must be set to enable it
+    GOOGLE_CLIENT_ID: z.string().optional(),
+    GOOGLE_CLIENT_SECRET: z.string().optional(),
+    // Emails per day a workspace may send from the shared sandbox sender before verifying a domain
+    SANDBOX_DAILY_LIMIT: z.coerce.number().int().min(0).default(50),
+
     // Shared secret for internal-only endpoints (bounce ingestion from the MTA).
     // Unset = internal endpoints are disabled.
     INTERNAL_API_TOKEN: z.string().min(32).optional(),
@@ -50,6 +58,8 @@ const envSchema = z
     TRUST_PROXY: z.preprocess((val) => val === "true" || val === true, z.boolean()).default(false),
     RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(600),
 
+    // TredMail's own sending domain: account emails come from no-reply@ and the sandbox
+    // sender is onboarding@. It belongs to the platform workspace and must be DNS-verified.
     PRIMARY_DOMAIN: z.string().default("tredmail.dovepeak.com"),
     TRACKING_DOMAIN: z.string().default("track.tredmail.dovepeak.com"),
     BOUNCE_DOMAIN: z.string().default("bounces.tredmail.dovepeak.com"),
@@ -94,6 +104,9 @@ const envSchema = z
       });
     }
   });
+
+/** Workspace that owns TredMail's own sending domain. Created by the seed. */
+export const PLATFORM_ORG_SLUG = "tredmail-platform";
 
 export type Env = z.infer<typeof envSchema> & {
   TRACKING_BASE_URL: string;

@@ -1,5 +1,6 @@
-import { prisma } from "@tredmail/db";
+import { prisma, type Domain } from "@tredmail/db";
 import { enqueueEmail } from "../queue/email.queue.js";
+import { env, PLATFORM_ORG_SLUG } from "../config/env.js";
 import { findReservedHeaders, parseFromAddress, type SendEmailInput } from "./email-validation.js";
 
 export { sendEmailSchema } from "./email-validation.js";
@@ -7,9 +8,106 @@ export { sendEmailSchema } from "./email-validation.js";
 const toList = (value: string | string[] | undefined) =>
   value === undefined ? [] : Array.isArray(value) ? value : [value];
 
+const SANDBOX_LOCAL_PART = "onboarding";
+
+let platformOrgId: string | null = null;
+
+/** ID of the workspace that owns TredMail's own domain, or null before the seed has run. */
+export async function getPlatformOrganizationId(): Promise<string | null> {
+  if (platformOrgId) return platformOrgId;
+  const org = await prisma.organization.findUnique({ where: { slug: PLATFORM_ORG_SLUG }, select: { id: true } });
+  platformOrgId = org?.id ?? null;
+  return platformOrgId;
+}
+
+type Failure = { ok: false; statusCode: number; error: string; message: string };
+
+/**
+ * Finds the verified domain a message may be sent from.
+ *
+ * Workspaces send from their own verified domains. Before they have one, they may use the
+ * shared sandbox sender (onboarding@<platform domain>), limited to their own members'
+ * verified addresses and a small daily volume, so a new user can try the API in minutes
+ * without TredMail becoming an open relay.
+ */
+async function resolveSendingDomain(
+  organizationId: string,
+  sender: { address: string; domain: string },
+  recipients: string[]
+): Promise<{ ok: true; domain: Domain } | Failure> {
+  const platformId = await getPlatformOrganizationId();
+  const isPlatformDomain = sender.domain === env.PRIMARY_DOMAIN.toLowerCase();
+
+  if (isPlatformDomain && organizationId !== platformId) {
+    const domain = platformId
+      ? await prisma.domain.findFirst({ where: { organizationId: platformId, name: sender.domain } })
+      : null;
+    if (!domain || domain.status !== "VERIFIED") {
+      return { ok: false, statusCode: 503, error: "sandbox_unavailable", message: "The sandbox sender is not available right now." };
+    }
+    if (sender.address !== `${SANDBOX_LOCAL_PART}@${sender.domain}`) {
+      return {
+        ok: false,
+        statusCode: 403,
+        error: "sandbox_sender_only",
+        message: `Until you verify a domain, send from '${SANDBOX_LOCAL_PART}@${sender.domain}'.`,
+      };
+    }
+
+    const members = await prisma.organizationMember.findMany({
+      where: { organizationId, user: { emailVerified: true } },
+      select: { user: { select: { email: true } } },
+    });
+    const allowed = new Set(members.map((m) => m.user.email.toLowerCase()));
+    const blocked = recipients.filter((address) => !allowed.has(address));
+    if (blocked.length > 0) {
+      return {
+        ok: false,
+        statusCode: 403,
+        error: "sandbox_recipient_not_allowed",
+        message: `The sandbox sender can only email your workspace members' verified addresses. Verify a domain to send to ${blocked[0]}.`,
+      };
+    }
+
+    const startOfDay = new Date();
+    startOfDay.setUTCHours(0, 0, 0, 0);
+    const sentToday = await prisma.email.count({
+      where: { organizationId, domainId: domain.id, createdAt: { gte: startOfDay } },
+    });
+    if (sentToday >= env.SANDBOX_DAILY_LIMIT) {
+      return {
+        ok: false,
+        statusCode: 429,
+        error: "sandbox_limit_reached",
+        message: `The sandbox allows ${env.SANDBOX_DAILY_LIMIT} emails per day. Verify a domain to send more.`,
+      };
+    }
+    return { ok: true, domain };
+  }
+
+  const domain = await prisma.domain.findFirst({ where: { organizationId, name: sender.domain } });
+  if (!domain) {
+    return {
+      ok: false,
+      statusCode: 403,
+      error: "domain_not_registered",
+      message: `Domain '${sender.domain}' is not registered in this workspace. Add it under Domains first.`,
+    };
+  }
+  if (domain.status !== "VERIFIED") {
+    return {
+      ok: false,
+      statusCode: 403,
+      error: "domain_not_verified",
+      message: `Domain '${sender.domain}' is not verified yet. Publish its DNS records and run verification.`,
+    };
+  }
+  return { ok: true, domain };
+}
+
 export type AcceptResult =
   | { ok: true; email: { id: string; from: string; to: string[]; createdAt: Date } }
-  | { ok: false; statusCode: number; error: string; message: string };
+  | Failure;
 
 /**
  * Validates sender domain and suppressions, records the email and enqueues it for delivery.
@@ -35,28 +133,14 @@ export async function acceptEmail(organizationId: string, payload: SendEmailInpu
     return { ok: false, statusCode: 422, error: "invalid_from", message: `Invalid 'from' address: '${payload.from}'.` };
   }
 
-  const domain = await prisma.domain.findFirst({ where: { organizationId, name: sender.domain } });
-  if (!domain) {
-    return {
-      ok: false,
-      statusCode: 403,
-      error: "domain_not_registered",
-      message: `Domain '${sender.domain}' is not registered under your account. Register it via POST /v1/domains first.`,
-    };
-  }
-  if (domain.status !== "VERIFIED") {
-    return {
-      ok: false,
-      statusCode: 403,
-      error: "domain_not_verified",
-      message: `Domain '${sender.domain}' is not yet verified. Complete DNS authentication in the TredMail console.`,
-    };
-  }
-
   const to = toList(payload.to);
   const cc = toList(payload.cc);
   const bcc = toList(payload.bcc);
   const allRecipients = [...to, ...cc, ...bcc].map((address) => address.toLowerCase());
+
+  const resolved = await resolveSendingDomain(organizationId, sender, allRecipients);
+  if (!resolved.ok) return resolved;
+  const { domain } = resolved;
 
   const suppressed = await prisma.suppression.findFirst({
     where: { organizationId, email: { in: allRecipients } },

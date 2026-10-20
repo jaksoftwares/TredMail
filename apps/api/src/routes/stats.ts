@@ -1,12 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "@tredmail/db";
-import { authenticateApiKey, requireScope } from "../middleware/auth.js";
+import { authenticate, requireScope } from "../middleware/auth.js";
 
 const percent = (part: number, whole: number, digits = 1) =>
   `${whole > 0 ? ((part / whole) * 100).toFixed(digits) : (0).toFixed(digits)}%`;
 
 export async function statsRoutes(fastify: FastifyInstance) {
-  fastify.addHook("preHandler", authenticateApiKey);
+  fastify.addHook("preHandler", authenticate);
   fastify.addHook("preHandler", requireScope("stats:read"));
 
   // GET /v1/stats - Lifetime sending and engagement metrics, plus the 10 most recent emails

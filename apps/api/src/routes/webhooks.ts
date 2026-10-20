@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "@tredmail/db";
-import { authenticateApiKey, requireScope } from "../middleware/auth.js";
+import { auditActor, authenticate, requireScope } from "../middleware/auth.js";
+import { recordAudit } from "@tredmail/core/services/audit";
 import {
   WEBHOOK_EVENT_TYPES,
   assertWebhookUrlAllowed,
@@ -20,7 +21,7 @@ const createWebhookSchema = z.object({
 });
 
 export async function webhookRoutes(fastify: FastifyInstance) {
-  fastify.addHook("preHandler", authenticateApiKey);
+  fastify.addHook("preHandler", authenticate);
   fastify.addHook("preHandler", requireScope("webhooks:manage"));
 
   // GET /v1/webhooks - List endpoints. Signing secrets are shown only once, at creation.
@@ -75,6 +76,16 @@ export async function webhookRoutes(fastify: FastifyInstance) {
       },
     });
 
+    await recordAudit({
+      organizationId: request.organization!.id,
+      ...auditActor(request),
+      action: "webhook.created",
+      targetType: "webhook",
+      targetId: webhook.id,
+      metadata: { url, subscribed_to },
+      ipAddress: request.ip,
+    });
+
     return reply.status(201).send({
       id: webhook.id,
       url: webhook.url,
@@ -95,6 +106,15 @@ export async function webhookRoutes(fastify: FastifyInstance) {
     }
 
     await prisma.webhook.delete({ where: { id: webhook.id } });
+    await recordAudit({
+      organizationId: request.organization!.id,
+      ...auditActor(request),
+      action: "webhook.deleted",
+      targetType: "webhook",
+      targetId: webhook.id,
+      metadata: { url: webhook.url },
+      ipAddress: request.ip,
+    });
     return reply.status(200).send({ success: true, message: "Webhook deleted." });
   });
 

@@ -5,7 +5,7 @@ import { env } from "@tredmail/core/config/env";
 import { prisma } from "@tredmail/db";
 import { redisConnection } from "@tredmail/core/queue/redis";
 import { hashApiKey } from "@tredmail/core/security/api-keys";
-import { authenticateApiKey, requireScope } from "./middleware/auth.js";
+import { authenticate, requireScope } from "./middleware/auth.js";
 import { emailRoutes, sendBatch } from "./routes/emails.js";
 import { domainRoutes } from "./routes/domains.js";
 import { apiKeyRoutes } from "./routes/api-keys.js";
@@ -14,8 +14,10 @@ import { trackingRoutes } from "./routes/tracking.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { suppressionRoutes } from "./routes/suppressions.js";
 import { bounceRoutes } from "./routes/bounces.js";
+import { accountRoutes, invitationLookupRoute, workspaceRoutes } from "./routes/account.js";
+import { authHandlerRoutes } from "./routes/auth-handler.js";
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 
 export async function buildServer() {
   const fastify = Fastify({
@@ -23,6 +25,18 @@ export async function buildServer() {
     trustProxy: env.TRUST_PROXY,
     // Attachments travel base64 in the JSON body until object storage lands (roadmap Phase 3).
     bodyLimit: 10 * 1024 * 1024,
+  });
+
+  // Accept `Content-Type: application/json` with an empty body (common on DELETE from fetch
+  // wrappers) instead of rejecting it; malformed JSON is still a 400.
+  fastify.removeContentTypeParser("application/json");
+  fastify.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
+    if (body === "") return done(null, undefined);
+    try {
+      done(null, JSON.parse(body as string));
+    } catch {
+      done(Object.assign(new Error("Request body is not valid JSON."), { statusCode: 400 }), undefined);
+    }
   });
 
   await fastify.register(cors, {
@@ -59,9 +73,17 @@ export async function buildServer() {
     await api.register(webhookRoutes, { prefix: "/v1/webhooks" });
     await api.register(suppressionRoutes, { prefix: "/v1/suppressions" });
 
+    // Console accounts, workspaces, members and invitations
+    await api.register(accountRoutes, { prefix: "/v1" });
+    await api.register(workspaceRoutes, { prefix: "/v1" });
+    await api.register(invitationLookupRoute, { prefix: "/v1" });
+
     // Documented path for batch sending (also served at /v1/emails/batch)
-    api.post("/v1/batch", { preHandler: [authenticateApiKey, requireScope("emails:send")] }, sendBatch);
+    api.post("/v1/batch", { preHandler: [authenticate, requireScope("emails:send")] }, sendBatch);
   });
+
+  // Console identity (Better Auth applies its own, stricter rate limits)
+  await fastify.register(authHandlerRoutes);
 
   // Public tracking routes: signed URLs, no API key, not counted against API limits.
   await fastify.register(trackingRoutes, { prefix: "/v1/track" });
