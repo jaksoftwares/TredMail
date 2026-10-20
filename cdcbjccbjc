@@ -1,0 +1,34 @@
+* [33m8b10e1b[m[33m ([m[1;31morigin/dependabot/npm_and_yarn/prisma/client-7.10.1[m[33m)[m build(deps): bump @prisma/client from 5.22.0 to 7.10.1
+[31m|[m * [33m62dd80a[m[33m ([m[1;31morigin/dependabot/npm_and_yarn/types/node-26.6.5[m[33m)[m build(deps-dev): bump @types/node from 22.20.5 to 26.6.5
+[31m|[m[31m/[m  
+[31m|[m * [33mb05a875[m[33m ([m[1;31morigin/dependabot/npm_and_yarn/prisma-7.10.1[m[33m)[m build(deps): bump prisma from 5.22.0 to 7.10.1
+[31m|[m[31m/[m  
+[31m|[m * [33m899fa28[m[33m ([m[1;31morigin/dependabot/npm_and_yarn/console/lucide-react-1.59.0[m[33m)[m build(deps): bump lucide-react from 0.453.0 to 1.59.0 in /console
+[31m|[m[31m/[m  
+[31m|[m * [33md60ec2f[m[33m ([m[1;31morigin/dependabot/npm_and_yarn/console/multi-75c0a8599d[m[33m)[m build(deps): bump react-dom and @types/react-dom in /console
+[31m|[m[31m/[m  
+[31m|[m * [33mfe18f72[m[33m ([m[1;31morigin/dependabot/npm_and_yarn/dotenv-18.0.8[m[33m)[m build(deps): bump dotenv from 16.6.1 to 18.0.8
+[31m|[m[31m/[m  
+[31m|[m * [33m913dcad[m[33m ([m[1;31morigin/dependabot/npm_and_yarn/concurrently-10.0.6[m[33m)[m build(deps-dev): bump concurrently from 9.2.5 to 10.0.6
+[31m|[m[31m/[m  
+[31m|[m * [33m5036ac3[m[33m ([m[1;31morigin/dependabot/npm_and_yarn/console/typescript-7.0.2[m[33m)[m build(deps-dev): bump typescript from 5.9.3 to 7.0.2 in /console
+[31m|[m[31m/[m  
+[31m|[m * [33m6656049[m[33m ([m[1;31morigin/dependabot/npm_and_yarn/console/vitejs/plugin-react-6.1.2[m[33m)[m build(deps-dev): bump @vitejs/plugin-react in /console
+[31m|[m[31m/[m  
+[31m|[m * [33m793d8db[m[33m ([m[1;31morigin/dependabot/npm_and_yarn/console/multi-b1658bdecd[m[33m)[m build(deps): bump react and @types/react in /console
+[31m|[m[31m/[m  
+[31m|[m * [33m7026782[m[33m ([m[1;31morigin/dependabot/docker/node-26-alpine[m[33m)[m build(deps): bump node from 22-alpine to 26-alpine
+[31m|[m[31m/[m  
+[31m|[m * [33m800c4c6[m[33m ([m[1;31morigin/dependabot/github_actions/actions/checkout-7[m[33m)[m build(deps): bump actions/checkout from 4 to 7
+[31m|[m[31m/[m  
+[31m|[m * [33mf0b7c8c[m[33m ([m[1;31morigin/dependabot/github_actions/actions/setup-node-7[m[33m)[m build(deps): bump actions/setup-node from 4 to 7
+[31m|[m[31m/[m  
+*   [33m40b57c9[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m Merge pull request #1 from jaksoftwares/phase-0/stabilise-and-secure
+[32m|[m[33m\[m  
+[32m|[m * [33m636c2cb[m[33m ([m[1;31morigin/phase-0/stabilise-and-secure[m[33m)[m Phase 0: stabilise and secure the platform
+[32m|[m[32m/[m  
+* [33m3c57a7b[m[33m ([m[1;31morigin/test[m[33m, [m[1;31morigin/prod[m[33m, [m[1;31morigin/dev[m[33m, [m[1;32mdev[m[33m)[m feat: complete TredMail platform end-to-end with API, worker, DKIM, tracking, webhooks, console, and deployment playbook
+* [33ma9f9855[m Initial commit
+* [33m33ed1c9[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mphase-0/stabilise-and-secure[m[33m, [m[1;32mbackup/phase-0-local-before-reconcile[m[33m)[m Phase 0: stabilise and secure the platform
+* [33m80acee2[m[33m ([m[1;32mmain[m[33m)[m feat: complete TredMail platform end-to-end with API, worker, DKIM, tracking, webhooks, console, and deployment playbook
+* [33m8e13853[m Initial commit
