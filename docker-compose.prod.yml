@@ -70,7 +70,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["node", "dist/worker/queue.js"]
+    command: ["node", "apps/worker/dist/index.js"]
     container_name: tredmail-worker-prod
     restart: always
     depends_on:

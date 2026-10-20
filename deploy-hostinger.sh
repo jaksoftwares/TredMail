@@ -68,11 +68,11 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 # 7. Apply database migrations (never `db push` in production)
 echo "🗄️ Applying database migrations..."
-docker compose -f docker-compose.prod.yml exec -T api npx prisma migrate deploy --schema=prisma/schema.prisma
+docker compose -f docker-compose.prod.yml exec -T api npx prisma migrate deploy --schema=packages/db/prisma/schema.prisma
 
 # 8. Seed Initial Organization & Master API Key (prints the key once)
 echo "🌱 Initializing Dovepeak Organization..."
-docker compose -f docker-compose.prod.yml exec -T api node dist/db/seed.js
+docker compose -f docker-compose.prod.yml exec -T api node apps/api/dist/cli/seed.js
 
 echo ""
 echo "=============================================================================="

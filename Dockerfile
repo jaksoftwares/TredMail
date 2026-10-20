@@ -1,53 +1,50 @@
-# -------------------------------------------------------------
-# Stage 1: Build Application & Console
-# -------------------------------------------------------------
+# TredMail API and worker image (one image, two commands).
+
+# ---------------------------------------------------------------
+# Build: install the workspace, generate Prisma, bundle the apps
+# ---------------------------------------------------------------
 FROM node:22-alpine AS builder
-
 WORKDIR /app
 
-# Install dependencies for both root and console
-COPY package*.json ./
-COPY console/package*.json ./console/
-COPY prisma ./prisma/
-
+COPY package.json package-lock.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/worker/package.json apps/worker/
+COPY packages/core/package.json packages/core/
+COPY packages/db/package.json packages/db/
+COPY packages/sdk-node/package.json packages/sdk-node/
 RUN npm ci
-RUN cd console && npm ci
 
-# Copy source files
-COPY tsconfig.json ./
-COPY src ./src/
-COPY console ./console/
+COPY tsconfig.base.json ./
+COPY packages ./packages
+COPY apps/api ./apps/api
+COPY apps/worker ./apps/worker
+RUN npm run db:generate && npm run build
 
-# Generate Prisma Client & compile TypeScript
-RUN npx prisma generate --schema=prisma/schema.prisma
-RUN npm run build
-RUN cd console && npm run build
-
-# -------------------------------------------------------------
-# Stage 2: Production Lightweight Runtime
-# -------------------------------------------------------------
+# ---------------------------------------------------------------
+# Runtime: production dependencies and bundled output only
+# ---------------------------------------------------------------
 FROM node:22-alpine AS runner
-
 WORKDIR /app
-
 ENV NODE_ENV=production
 ENV PORT=3000
 
-# Install production dependencies only (includes the Prisma CLI for `migrate deploy`)
-COPY package*.json ./
-RUN npm ci --omit=dev
+COPY package.json package-lock.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/worker/package.json apps/worker/
+COPY packages/core/package.json packages/core/
+COPY packages/db/package.json packages/db/
+COPY packages/sdk-node/package.json packages/sdk-node/
+RUN npm ci --omit=dev && npm cache clean --force
 
-# Copy generated Prisma artifacts & compiled code
-COPY prisma ./prisma/
-RUN npx prisma generate --schema=prisma/schema.prisma
+# Schema and migrations are needed at runtime for `prisma migrate deploy`.
+COPY packages/db/prisma ./packages/db/prisma
+RUN npx prisma generate --schema=packages/db/prisma/schema.prisma
 
-COPY --from=builder /app/dist ./dist/
-COPY --from=builder /app/console/dist ./console/dist/
+COPY --from=builder /app/apps/api/dist ./apps/api/dist
+COPY --from=builder /app/apps/worker/dist ./apps/worker/dist
 
 USER node
-
-# Expose API and Console
 EXPOSE 3000
 
-# Start production API and BullMQ worker
-CMD ["node", "dist/api/server.js"]
+# API by default; the worker service overrides the command.
+CMD ["node", "apps/api/dist/server.js"]

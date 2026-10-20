@@ -1,5 +1,6 @@
 version: 2
 updates:
+  # Root lockfile covers every workspace (apps/*, packages/*).
   - package-ecosystem: npm
     directory: /
     schedule:
@@ -7,13 +8,20 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    # Major upgrades (Prisma, TypeScript, Node, React...) are planned work, not automatic PRs.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
-    directory: /console
+    directory: /apps/console
     schedule:
       interval: weekly
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -22,3 +30,6 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    ignore:
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]

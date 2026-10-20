@@ -1,0 +1,21 @@
+{
+  "name": "@tredmail/api",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsup",
+    "start": "node dist/server.js",
+    "seed": "tsx src/cli/seed.ts",
+    "keys:revoke": "tsx src/cli/revoke-api-key.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.3.1",
+    "@fastify/rate-limit": "^11.2.1",
+    "@tredmail/core": "*",
+    "@tredmail/db": "*",
+    "fastify": "^5.12.7",
+    "zod": "^3.23.8"
+  }
+}

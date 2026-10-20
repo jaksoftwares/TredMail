@@ -53,7 +53,7 @@ jobs:
       - name: Migrations apply cleanly and match the schema
         run: |
           npm run db:deploy
-          npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code
+          npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel packages/db/prisma/schema.prisma --exit-code
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test

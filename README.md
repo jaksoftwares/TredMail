@@ -131,7 +131,7 @@ The complete technical blueprint is structured into the following deep-dive guid
   * Resend-compatible REST API endpoints, request/response models, code examples (Node.js, Python, cURL), and error handling.
 - 🛡️ [Deliverability, Infrastructure & Compliance Guide](docs/DELIVERABILITY_AND_INFRASTRUCTURE.md)
   * Port 25 unblocking, rDNS setup, SPF/DKIM/DMARC generator algorithms, IP warmup schedules, and 2024+ Yahoo/Google rules.
-- 🗄️ [Database Schema (Prisma)](prisma/schema.prisma)
+- 🗄️ [Database Schema (Prisma)](packages/db/prisma/schema.prisma)
   * Production-ready schema for Tenants, Users, Domains, API Keys, Messages, Delivery Events, Suppressions, and Webhooks.
 - 🚀 [Implementation Roadmap & Step-by-Step Build Plan](docs/ROADMAP_AND_IMPLEMENTATION.md)
   * Phase-by-phase execution plan from local prototype to production cloud deployment.
@@ -190,7 +190,7 @@ TREDMAIL_API_KEY=tred_live_... npm run test:smoke # full send -> worker -> Mailp
 
 - Never commit API keys, webhook secrets or `.env`. CI runs gitleaks on every pull request.
 - API keys carry scopes (`emails:send`, `domains:manage`, `api_keys:manage`, `full_access`, ...). Give services the narrowest key that works.
-- If a key leaks: `npm run keys:revoke -- <key>` (or `node dist/cli/revoke-api-key.js <key>` in the production image), then issue a new one.
+- If a key leaks: `npm run keys:revoke -- <key>` (or `node apps/api/dist/cli/revoke-api-key.js <key>` in the production image), then issue a new one.
 
 ### Production
 
