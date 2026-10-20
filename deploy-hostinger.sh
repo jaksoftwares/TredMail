@@ -32,11 +32,22 @@ SERVER_IP=$(curl -s -4 https://ifconfig.me || hostname -I | awk '{print $1}')
 echo "🔍 Checking Reverse DNS for IP: $SERVER_IP..."
 PTR_RECORD=$(dig -x $SERVER_IP +short || true)
 
+EXPECTED_PTR="${MTA_HOSTNAME:-mta1.tredmail.dovepeakdigital.com}"
 if [ -z "$PTR_RECORD" ]; then
     echo "⚠️ WARNING: No PTR (Reverse DNS) record detected for $SERVER_IP."
-    echo "   Action needed: Go to Hostinger hPanel -> VPS -> Settings -> IP address -> Set PTR to mail.tredmail.dovepeak.com"
+    echo "   Action needed: hPanel -> VPS -> Settings -> PTR record, set to $EXPECTED_PTR (or ask Hostinger support)"
+elif [ "${PTR_RECORD%.}" != "$EXPECTED_PTR" ]; then
+    echo "⚠️ WARNING: PTR for $SERVER_IP is $PTR_RECORD but must be $EXPECTED_PTR (it must match the HELO name)."
 else
-    echo "✅ Reverse DNS detected: $PTR_RECORD"
+    echo "✅ Reverse DNS matches: $PTR_RECORD"
+fi
+
+# Inbound port 25 receives bounces and complaints; open it if the host firewall is active.
+if command -v ufw &> /dev/null && sudo ufw status | grep -q "Status: active"; then
+    sudo ufw allow 25/tcp > /dev/null && echo "✅ Firewall allows inbound port 25"
+fi
+if ss -ltn 2>/dev/null | grep -qE '(0\.0\.0\.0|\[::\]|\*):25 ' && ! docker ps --format '{{.Names}}' | grep -q kumomta; then
+    echo "⚠️ WARNING: another mail server (Postfix/Exim) is listening on port 25; stop it so KumoMTA can bind the port."
 fi
 
 # 4. Deliverability Diagnostic: Check Outbound Port 25
@@ -54,7 +65,11 @@ STAGE="${STAGE:-production}"
 ENV_FILE=".env"
 [ "$STAGE" = "staging" ] && ENV_FILE=".env.staging"
 COMPOSE=(docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" -p "tredmail-$STAGE")
-[ "$STAGE" = "staging" ] && COMPOSE+=(--profile staging-relay)
+if [ "$STAGE" = "staging" ]; then
+    COMPOSE+=(--profile staging-relay)
+else
+    COMPOSE+=(--profile mta) # KumoMTA delivery engine on port 25
+fi
 
 if [ ! -f "$ENV_FILE" ]; then
     : "${CONSOLE_DOMAIN:?Set CONSOLE_DOMAIN, API_DOMAIN and TRACKING_DOMAIN before the first deploy}"
@@ -68,7 +83,7 @@ if [ ! -f "$ENV_FILE" ]; then
         echo "CONSOLE_DOMAIN=$CONSOLE_DOMAIN"
         echo "API_DOMAIN=$API_DOMAIN"
         echo "TRACKING_DOMAIN=$TRACKING_DOMAIN"
-        echo "PRIMARY_DOMAIN=${PRIMARY_DOMAIN:-tredmail.dovepeak.com}"
+        echo "PRIMARY_DOMAIN=${PRIMARY_DOMAIN:-tredmail.dovepeakdigital.com}"
         echo "TREDMAIL_MASTER_ENCRYPTION_KEY=$(openssl rand -hex 32)"
         echo "INTERNAL_API_TOKEN=$(openssl rand -hex 32)"
         echo "BETTER_AUTH_SECRET=$(openssl rand -hex 32)"
@@ -77,9 +92,19 @@ if [ ! -f "$ENV_FILE" ]; then
             echo "SMTP_HOST=mailpit"
             echo "SMTP_PORT=1025"
         else
-            echo "# Point at the MTA (roadmap Phase 2). Production cannot deliver mail until this is set."
-            echo "SMTP_HOST=${SMTP_HOST:-}"
-            echo "SMTP_PORT=${SMTP_PORT:-25}"
+            echo "# The worker hands mail to KumoMTA inside the Docker network"
+            echo "SMTP_HOST=kumomta"
+            echo "SMTP_PORT=2525"
+            echo "MTA_HOSTNAME=${MTA_HOSTNAME:-mta1.tredmail.dovepeakdigital.com}"
+            echo "# Alerts and mail sent to postmaster@/abuse@/dmarc@ are forwarded here"
+            echo "OPS_EMAIL=${OPS_EMAIL:-}"
+            echo "# IP warm-up starts today; clear this line after day 20"
+            echo "MTA_WARMUP_START=${MTA_WARMUP_START:-$(date -u +%Y-%m-%d)}"
+            echo "# Optional backup provider for mail above the warm-up cap"
+            echo "FALLBACK_SMTP_HOST="
+            echo "FALLBACK_SMTP_PORT=587"
+            echo "FALLBACK_SMTP_USER="
+            echo "FALLBACK_SMTP_PASS="
         fi
     } > "$ENV_FILE"
     echo "🔑 Generated encryption key, internal token, session secret and database password."

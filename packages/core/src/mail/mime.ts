@@ -8,7 +8,7 @@ export interface CompiledContent {
 export interface TrackingOptions {
   trackOpens?: boolean;
   trackClicks?: boolean;
-  /** Public base URL of the tracking routes, e.g. https://track.tredmail.dovepeak.com/v1/track */
+  /** Public base URL of the tracking routes, e.g. https://track.tredmail.dovepeakdigital.com/v1/track */
   trackingBaseUrl: string;
   signer: TrackingSigner;
 }

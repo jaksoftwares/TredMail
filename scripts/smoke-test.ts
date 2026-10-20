@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 
 const API_URL = (process.env.TREDMAIL_API_URL ?? "http://localhost:3000").replace(/\/+$/, "");
 const MAILPIT_URL = (process.env.MAILPIT_URL ?? "http://localhost:8035").replace(/\/+$/, "");
-const FROM = process.env.SMOKE_FROM ?? "TredMail Smoke Test <system@dovepeak.com>";
+const FROM = process.env.SMOKE_FROM ?? "TredMail Smoke Test <system@dovepeakdigital.com>";
 const API_KEY = process.env.TREDMAIL_API_KEY;
 
 if (!API_KEY) {
@@ -59,7 +59,7 @@ async function main() {
       from: FROM,
       to: "smoke-test@example.com",
       subject: `TredMail smoke test ${marker}`,
-      html: `<html><body><p>${marker}</p><p><a href="https://dovepeak.com/?ref=${marker}">Open</a></p></body></html>`,
+      html: `<html><body><p>${marker}</p><p><a href="https://dovepeakdigital.com/?ref=${marker}">Open</a></p></body></html>`,
       text: marker,
     }),
   });
@@ -70,7 +70,8 @@ async function main() {
   const sent = await waitFor("worker to send", async () => {
     const res = await api(`/v1/emails/${emailId}`);
     if (res.body.status === "failed") throw new Error(`worker failed: ${res.body.smtp_response}`);
-    return res.body.status === "sent" ? res.body : undefined;
+    // Through KumoMTA the email moves on to "delivered" as soon as the delivery log arrives
+    return res.body.status === "sent" || res.body.status === "delivered" ? res.body : undefined;
   });
   assert.ok(sent.events.some((e: Json) => e.type === "sent"), "SENT event recorded");
   step("worker handed the email to the SMTP relay");
@@ -81,7 +82,7 @@ async function main() {
     return found ? ((await (await fetch(`${MAILPIT_URL}/api/v1/message/${found.ID}`)).json()) as Json) : undefined;
   });
   const headers = (await (await fetch(`${MAILPIT_URL}/api/v1/message/${message.ID}/headers`)).json()) as Json;
-  assert.ok(headers["Dkim-Signature"]?.[0]?.includes("d=dovepeak.com"), "message is DKIM-signed for dovepeak.com");
+  assert.ok(headers["Dkim-Signature"]?.[0]?.includes("d=dovepeakdigital.com"), "message is DKIM-signed for dovepeakdigital.com");
   assert.equal(headers["List-Unsubscribe"], undefined, "transactional mail has no broken List-Unsubscribe header");
   step("Mailpit received a DKIM-signed message");
 
@@ -96,7 +97,7 @@ async function main() {
 
   const clickRes = await fetch(click!, { redirect: "manual" });
   assert.equal(clickRes.status, 302, "signed click redirects");
-  assert.equal(clickRes.headers.get("location"), `https://dovepeak.com/?ref=${marker}`);
+  assert.equal(clickRes.headers.get("location"), `https://dovepeakdigital.com/?ref=${marker}`);
 
   const tampered = click!.replace(/url=[^&]+/, `url=${encodeURIComponent("https://evil.example/")}`);
   assert.equal((await fetch(tampered, { redirect: "manual" })).status, 400, "tampered click link is rejected");

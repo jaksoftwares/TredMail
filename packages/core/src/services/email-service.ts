@@ -197,6 +197,7 @@ export async function acceptEmail(organizationId: string, payload: SendEmailInpu
       })),
       trackOpens: payload.track_opens ?? true,
       trackClicks: payload.track_clicks ?? true,
+      category: payload.tags?.find((tag) => tag.name === "category")?.value,
     });
   } catch (err) {
     // Until the transactional outbox lands (Phase 3), never leave a row stuck in QUEUED.

@@ -52,6 +52,7 @@ const RESERVED_HEADERS = new Set([
   "content-transfer-encoding",
   "list-unsubscribe",
   "list-unsubscribe-post",
+  "feedback-id",
 ]);
 
 export function findReservedHeaders(headers: Record<string, string> | undefined): string[] {

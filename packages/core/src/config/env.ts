@@ -61,10 +61,30 @@ const envSchema = z
 
     // TredMail's own sending domain: account emails come from no-reply@ and the sandbox
     // sender is onboarding@. It belongs to the platform workspace and must be DNS-verified.
-    PRIMARY_DOMAIN: z.string().default("tredmail.dovepeak.com"),
-    TRACKING_DOMAIN: z.string().default("track.tredmail.dovepeak.com"),
-    BOUNCE_DOMAIN: z.string().default("bounces.tredmail.dovepeak.com"),
+    PRIMARY_DOMAIN: z.string().default("tredmail.dovepeakdigital.com"),
+    TRACKING_DOMAIN: z.string().default("track.tredmail.dovepeakdigital.com"),
+    BOUNCE_DOMAIN: z.string().default("bounces.tredmail.dovepeakdigital.com"),
     DEFAULT_DKIM_SELECTOR: z.string().default("tredmail"),
+
+    // --- Delivery engine (KumoMTA) ---
+    // Name the mail server announces (HELO) and its IP's PTR record points to.
+    MTA_HOSTNAME: z.string().default("mta1.tredmail.dovepeakdigital.com"),
+    // Where operational mail goes: alerts, and mail sent to postmaster@, abuse@, dmarc@ and
+    // other addresses at PRIMARY_DOMAIN. Unset = alerts are only logged and inbound mail is dropped.
+    OPS_EMAIL: z.string().email().optional(),
+    // At most this many inbound messages are forwarded to OPS_EMAIL per day (spam protection).
+    INBOUND_FORWARD_DAILY_LIMIT: z.coerce.number().int().min(0).default(200),
+    // First day (YYYY-MM-DD, UTC) of IP warm-up. Unset = no warm-up cap.
+    MTA_WARMUP_START: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "must be a date like 2026-11-01")
+      .optional(),
+    // Optional relay (another provider's SMTP) for mail above the day's warm-up cap.
+    FALLBACK_SMTP_HOST: z.string().optional(),
+    FALLBACK_SMTP_PORT: z.coerce.number().int().positive().default(587),
+    FALLBACK_SMTP_SECURE: z.preprocess((val) => val === "true" || val === true, z.boolean()).default(false),
+    FALLBACK_SMTP_USER: z.string().optional().default(""),
+    FALLBACK_SMTP_PASS: z.string().optional().default(""),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.NODE_ENV !== "production") return;
@@ -80,7 +100,7 @@ const envSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["TRACKING_BASE_URL"],
-        message: "is required in production (e.g. https://track.tredmail.dovepeak.com/v1/track)",
+        message: "is required in production (e.g. https://track.tredmail.dovepeakdigital.com/v1/track)",
       });
     }
     if (cfg.WEBHOOK_ALLOW_PRIVATE_TARGETS) {

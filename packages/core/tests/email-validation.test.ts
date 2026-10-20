@@ -4,10 +4,10 @@ import { spfHasInclude } from "../src/dns/verifier.js";
 
 describe("parseFromAddress", () => {
   it("parses bare and display-name forms", () => {
-    expect(parseFromAddress("ops@Dovepeak.com")).toEqual({ address: "ops@dovepeak.com", domain: "dovepeak.com" });
-    expect(parseFromAddress("Dovepeak <ops@dovepeak.com>")).toEqual({
-      address: "ops@dovepeak.com",
-      domain: "dovepeak.com",
+    expect(parseFromAddress("ops@Dovepeakdigital.com")).toEqual({ address: "ops@dovepeakdigital.com", domain: "dovepeakdigital.com" });
+    expect(parseFromAddress("Dovepeak <ops@dovepeakdigital.com>")).toEqual({
+      address: "ops@dovepeakdigital.com",
+      domain: "dovepeakdigital.com",
     });
   });
 
@@ -31,14 +31,14 @@ describe("findReservedHeaders", () => {
 
 describe("spfHasInclude", () => {
   it("matches the exact include term", () => {
-    expect(spfHasInclude("v=spf1 include:_spf.tredmail.dovepeak.com ~all", "_spf.tredmail.dovepeak.com")).toBe(true);
-    expect(spfHasInclude("v=spf1 +include:_SPF.tredmail.dovepeak.com. -all", "_spf.tredmail.dovepeak.com")).toBe(true);
+    expect(spfHasInclude("v=spf1 include:_spf.tredmail.dovepeakdigital.com ~all", "_spf.tredmail.dovepeakdigital.com")).toBe(true);
+    expect(spfHasInclude("v=spf1 +include:_SPF.tredmail.dovepeakdigital.com. -all", "_spf.tredmail.dovepeakdigital.com")).toBe(true);
   });
 
   it("does not accept a different provider's include", () => {
-    expect(spfHasInclude("v=spf1 include:_spf.google.com ~all", "_spf.tredmail.dovepeak.com")).toBe(false);
+    expect(spfHasInclude("v=spf1 include:_spf.google.com ~all", "_spf.tredmail.dovepeakdigital.com")).toBe(false);
     expect(
-      spfHasInclude("v=spf1 include:_spf.tredmail.dovepeak.com.evil.com ~all", "_spf.tredmail.dovepeak.com")
+      spfHasInclude("v=spf1 include:_spf.tredmail.dovepeakdigital.com.evil.com ~all", "_spf.tredmail.dovepeakdigital.com")
     ).toBe(false);
   });
 });

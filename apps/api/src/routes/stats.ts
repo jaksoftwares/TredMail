@@ -37,7 +37,8 @@ export async function statsRoutes(fastify: FastifyInstance) {
       byStatus.filter((row) => statuses.includes(row.status)).reduce((sum, row) => sum + row._count._all, 0);
 
     const totalEmails = count("QUEUED", "SENDING", "SENT", "DELIVERED", "FAILED", "BOUNCED", "COMPLAINED");
-    // "Accepted" = handed to the MTA. Confirmed delivery needs MTA delivery logs (roadmap Phase 2).
+    // "Accepted" = handed to the mail server. DELIVERED, BOUNCED and FAILED come from KumoMTA's
+    // delivery log and from bounce reports; mail sent through the fallback relay stays SENT.
     const acceptedCount = count("SENT", "DELIVERED", "BOUNCED", "COMPLAINED");
     const deliveredCount = count("DELIVERED");
     const bouncedCount = count("BOUNCED");

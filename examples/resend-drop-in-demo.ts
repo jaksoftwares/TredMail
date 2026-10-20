@@ -20,14 +20,14 @@ async function sendViaTredMail() {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      from: "Dovepeak Team <notifications@dovepeak.com>",
+      from: "Dovepeak Team <notifications@dovepeakdigital.com>",
       to: ["developer@example.com"],
       subject: "Resend-compatible payload confirmed",
       html: `
         <div style="font-family: 'Open Sans', Arial, sans-serif; padding: 24px; background: #f8f8ff; color: #000027;">
           <h2>TredMail integration active</h2>
           <p>This message used the same payload you would send to Resend.</p>
-          <a href="https://dovepeak.com" style="background: #ff6300; color: #000027; padding: 10px 18px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 700;">
+          <a href="https://dovepeakdigital.com" style="background: #ff6300; color: #000027; padding: 10px 18px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 700;">
             Open Dovepeak
           </a>
         </div>

@@ -12,7 +12,7 @@ All requests must be made over **HTTPS**. Authenticate by providing your API key
 Authorization: Bearer tred_live_...
 ```
 
-* **Production Base URL**: `https://api.tredmail.dovepeak.com/v1`
+* **Production Base URL**: `https://api.tredmail.dovepeakdigital.com/v1`
 * **Development / Self-Hosted Local URL**: `http://localhost:3000/v1`
 
 ---
@@ -33,11 +33,11 @@ Authorization: Bearer tred_live_...
 #### Request Body
 ```json
 {
-  "from": "Dovepeak Team <onboarding@dovepeak.com>",
+  "from": "Dovepeak Team <onboarding@dovepeakdigital.com>",
   "to": ["client@example.com"],
-  "cc": ["manager@dovepeak.com"],
-  "bcc": ["archive@dovepeak.com"],
-  "reply_to": "support@dovepeak.com",
+  "cc": ["manager@dovepeakdigital.com"],
+  "bcc": ["archive@dovepeakdigital.com"],
+  "reply_to": "support@dovepeakdigital.com",
   "subject": "Welcome to Dovepeak Cloud Platform",
   "html": "<!DOCTYPE html><html><body><h1>Hello, World!</h1><p>Welcome to our platform.</p></body></html>",
   "text": "Hello, World! Welcome to our platform.",
@@ -62,7 +62,7 @@ Authorization: Bearer tred_live_...
 ```json
 {
   "id": "msg_90e76b25-41a4-4df2-bc67-0c67f4077641",
-  "from": "Dovepeak Team <onboarding@dovepeak.com>",
+  "from": "Dovepeak Team <onboarding@dovepeakdigital.com>",
   "to": ["client@example.com"],
   "status": "queued",
   "created_at": "2026-10-17T12:00:00.000Z"
@@ -74,7 +74,7 @@ Authorization: Bearer tred_live_...
 {
   "statusCode": 400,
   "name": "validation_error",
-  "message": "The domain 'dovepeak.com' has not completed DKIM/SPF verification. Please verify DNS records in the TredMail console.",
+  "message": "The domain 'dovepeakdigital.com' has not completed DKIM/SPF verification. Please verify DNS records in the TredMail console.",
   "code": "DOMAIN_NOT_VERIFIED"
 }
 ```
@@ -100,13 +100,13 @@ Send up to 100 individual emails in a single HTTP request.
 ```json
 [
   {
-    "from": "alerts@dovepeak.com",
+    "from": "alerts@dovepeakdigital.com",
     "to": "user1@example.com",
     "subject": "Security notification",
     "html": "<p>A new login was detected.</p>"
   },
   {
-    "from": "alerts@dovepeak.com",
+    "from": "alerts@dovepeakdigital.com",
     "to": "user2@example.com",
     "subject": "Security notification",
     "html": "<p>A new login was detected.</p>"
@@ -135,7 +135,7 @@ Inspect the live status, delivery timestamp, and tracking events for a specific 
 ```json
 {
   "id": "msg_90e76b25-41a4-4df2-bc67-0c67f4077641",
-  "from": "onboarding@dovepeak.com",
+  "from": "onboarding@dovepeakdigital.com",
   "to": ["client@example.com"],
   "subject": "Welcome to Dovepeak Cloud Platform",
   "status": "delivered",
@@ -174,7 +174,7 @@ Registers a new sending domain in TredMail and generates custom DKIM, SPF, and D
 #### Request Body
 ```json
 {
-  "name": "dovepeak.com",
+  "name": "dovepeakdigital.com",
   "region": "eu-central"
 }
 ```
@@ -183,12 +183,12 @@ Registers a new sending domain in TredMail and generates custom DKIM, SPF, and D
 ```json
 {
   "id": "dom_d41d8cd98f00b204e9800998ecf8427e",
-  "name": "dovepeak.com",
+  "name": "dovepeakdigital.com",
   "status": "pending",
   "records": [
     {
       "record": "DKIM",
-      "name": "tredmail._domainkey.dovepeak.com",
+      "name": "tredmail._domainkey.dovepeakdigital.com",
       "type": "TXT",
       "ttl": "Auto",
       "status": "pending",
@@ -196,27 +196,27 @@ Registers a new sending domain in TredMail and generates custom DKIM, SPF, and D
     },
     {
       "record": "SPF",
-      "name": "dovepeak.com",
+      "name": "dovepeakdigital.com",
       "type": "TXT",
       "ttl": "Auto",
       "status": "pending",
-      "value": "v=spf1 include:_spf.tredmail.dovepeak.com ~all"
+      "value": "v=spf1 include:_spf.tredmail.dovepeakdigital.com ~all"
     },
     {
       "record": "DMARC",
-      "name": "_dmarc.dovepeak.com",
+      "name": "_dmarc.dovepeakdigital.com",
       "type": "TXT",
       "ttl": "Auto",
       "status": "pending",
-      "value": "v=DMARC1; p=quarantine; rua=mailto:dmarc@tredmail.dovepeak.com;"
+      "value": "v=DMARC1; p=quarantine; rua=mailto:dmarc@tredmail.dovepeakdigital.com;"
     },
     {
       "record": "Return-Path",
-      "name": "bounces.dovepeak.com",
+      "name": "bounces.dovepeakdigital.com",
       "type": "CNAME",
       "ttl": "Auto",
       "status": "pending",
-      "value": "bounces.tredmail.dovepeak.com"
+      "value": "bounces.tredmail.dovepeakdigital.com"
     }
   ]
 }
@@ -231,7 +231,7 @@ Forces TredMail to perform an active DNS lookup on the domain's TXT and CNAME re
 ```json
 {
   "id": "dom_d41d8cd98f00b204e9800998ecf8427e",
-  "name": "dovepeak.com",
+  "name": "dovepeakdigital.com",
   "status": "verified",
   "verified_at": "2026-10-17T12:05:00.000Z"
 }
@@ -258,7 +258,7 @@ TredMail can dispatch real-time JSON webhooks to your applications when email ev
   "created_at": "2026-10-17T12:00:02.140Z",
   "data": {
     "email_id": "msg_90e76b25-41a4-4df2-bc67-0c67f4077641",
-    "from": "onboarding@dovepeak.com",
+    "from": "onboarding@dovepeakdigital.com",
     "to": ["client@example.com"],
     "subject": "Welcome to Dovepeak Cloud Platform",
     "smtp_response": "250 2.0.0 OK 1729166402 d29si12345678wme.10 - gsmtp"
@@ -273,14 +273,14 @@ TredMail can dispatch real-time JSON webhooks to your applications when email ev
 ### 5.1 Node.js / TypeScript (Native Fetch)
 ```typescript
 async function sendWelcomeEmail() {
-  const response = await fetch("https://api.tredmail.dovepeak.com/v1/emails", {
+  const response = await fetch("https://api.tredmail.dovepeakdigital.com/v1/emails", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${process.env.TREDMAIL_API_KEY}`,
     },
     body: JSON.stringify({
-      from: "Dovepeak <notifications@dovepeak.com>",
+      from: "Dovepeak <notifications@dovepeakdigital.com>",
       to: ["user@example.com"],
       subject: "Your Dovepeak Account is Active",
       html: "<h1>Welcome aboard</h1><p>Your subscription is active.</p>",
@@ -303,7 +303,7 @@ const resend = new Resend(process.env.TREDMAIL_API_KEY);
 
 // Send email using existing Resend SDK code
 const { data, error } = await resend.emails.send({
-  from: "notifications@dovepeak.com",
+  from: "notifications@dovepeakdigital.com",
   to: "client@example.com",
   subject: "Automated Monthly Invoice",
   html: "<strong>Please find your invoice attached.</strong>",
@@ -318,16 +318,16 @@ import os
 import requests
 
 def send_email():
-    url = "https://api.tredmail.dovepeak.com/v1/emails"
+    url = "https://api.tredmail.dovepeakdigital.com/v1/emails"
     headers = {
         "Authorization": f"Bearer {os.environ.get('TREDMAIL_API_KEY')}",
         "Content-Type": "application/json"
     }
     payload = {
-        "from": "Dovepeak Technology <support@dovepeak.com>",
+        "from": "Dovepeak Technology <support@dovepeakdigital.com>",
         "to": ["user@example.com"],
         "subject": "Password Reset Request",
-        "html": "<p>Click <a href='https://dovepeak.com/reset'>here</a> to reset your password.</p>"
+        "html": "<p>Click <a href='https://dovepeakdigital.com/reset'>here</a> to reset your password.</p>"
     }
 
     res = requests.post(url, json=payload, headers=headers)
@@ -338,11 +338,11 @@ send_email()
 
 ### 5.4 cURL
 ```bash
-curl -X POST "https://api.tredmail.dovepeak.com/v1/emails" \
+curl -X POST "https://api.tredmail.dovepeakdigital.com/v1/emails" \
   -H "Authorization: Bearer $TREDMAIL_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "from": "Dovepeak Team <hi@dovepeak.com>",
+    "from": "Dovepeak Team <hi@dovepeakdigital.com>",
     "to": ["partner@company.com"],
     "subject": "System Verification Successful",
     "html": "<h3>Status: Operational</h3>"

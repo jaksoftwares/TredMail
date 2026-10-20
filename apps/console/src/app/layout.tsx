@@ -16,7 +16,7 @@ export const metadata: Metadata = {
   title: { default: "TredMail", template: "%s · TredMail" },
   description: "TredMail by Dovepeak Technologies: transactional email for your applications.",
   applicationName: "TredMail",
-  authors: [{ name: "Dovepeak Technologies", url: "https://dovepeak.com" }],
+  authors: [{ name: "Dovepeak Technologies", url: "https://dovepeakdigital.com" }],
   creator: "Dovepeak Technologies",
   publisher: "Dovepeak Technologies",
   openGraph: {

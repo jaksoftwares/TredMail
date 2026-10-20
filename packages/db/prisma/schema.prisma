@@ -222,7 +222,7 @@ enum DomainStatus {
 model Domain {
   id             String       @id @default(cuid())
   organizationId String
-  name           String // e.g. "dovepeak.com"
+  name           String // e.g. "dovepeakdigital.com"
   status         DomainStatus @default(PENDING)
   region         String       @default("eu-central")
 

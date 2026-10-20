@@ -41,7 +41,7 @@ Email itself is a decentralized internet standard (SMTP / RFC 5321). Dovepeak ca
 
 ### 3. What are the core requirements?
 1. **Server with Clean IP & Port 25 Open**: Hetzner, OVH, Scaleway, or Linode VPS with outbound Port 25 unblocked.
-2. **Reverse DNS (PTR Record)**: Resolving the IP address directly back to your mail server FQDN (e.g. `mail.tredmail.dovepeak.com`).
+2. **Reverse DNS (PTR Record)**: Resolving the IP address directly back to your mail server FQDN (e.g. `mail.tredmail.dovepeakdigital.com`).
 3. **Cryptographic DNS Authentication**:
    - **SPF**: Authorizing Dovepeak's mail servers.
    - **DKIM**: Auto-generating 2048-bit RSA / Ed25519 keypairs per sending domain.
@@ -182,7 +182,7 @@ The complete technical blueprint is structured into the following deep-dive guid
    npm run db:deploy
    npm run db:seed   # prints an owner login and an API key ONCE; store them in a password manager
    ```
-   The seed creates the platform workspace (owner of `tredmail.dovepeak.com`, used for account emails and the sandbox sender) and the Dovepeak workspace. In development both domains are marked verified so mail flows to Mailpit; anywhere else they must pass real DNS verification.
+   The seed creates the platform workspace (owner of `tredmail.dovepeakdigital.com`, used for account emails and the sandbox sender) and the Dovepeak workspace. In development both domains are marked verified so mail flows to Mailpit; anywhere else they must pass real DNS verification.
 4. **Run everything:**
    ```bash
    npm run dev:all   # API :3000, worker, console :3010
@@ -196,7 +196,7 @@ The complete technical blueprint is structured into the following deep-dive guid
 
 ### How a new user gets started
 
-Sign up, confirm the email (it arrives in Mailpit locally), create a workspace, then press **Send test email** on the Overview page. The sandbox sender (`onboarding@tredmail.dovepeak.com`) can email workspace members' verified addresses, 50 per day, before any DNS work. Adding and verifying a domain lifts that restriction.
+Sign up, confirm the email (it arrives in Mailpit locally), create a workspace, then press **Send test email** on the Overview page. The sandbox sender (`onboarding@tredmail.dovepeakdigital.com`) can email workspace members' verified addresses, 50 per day, before any DNS work. Adding and verifying a domain lifts that restriction.
 
 ### Checks
 
@@ -205,6 +205,7 @@ npm run typecheck && npm run lint && npm test         # what CI runs for the API
 npm run build:console                                 # console build and type check
 TREDMAIL_API_KEY=tred_live_... npm run test:smoke     # send -> worker -> Mailpit -> tracking
 npm run test:accounts                                 # sign-up, workspace, sandbox, invitations, roles
+TREDMAIL_API_KEY=tred_live_... npm run test:delivery  # KumoMTA: delivered, bounced, complained, forwarded
 ```
 
 ### Security rules
@@ -215,4 +216,61 @@ npm run test:accounts                                 # sign-up, workspace, sand
 
 ### Production
 
-`deploy-hostinger.sh` provisions Docker, generates every secret, applies migrations and seeds the organization. The production stack does not yet include an MTA or bounce handling (roadmap Phase 2).
+`deploy-hostinger.sh` provisions Docker, generates every secret, applies migrations and seeds the organization. Production runs KumoMTA (`mta/policy/init.lua`) as the delivery engine on port 25: the worker hands it DKIM-signed mail with a per-message VERP return path, and KumoMTA reports deliveries, delays and bounces back to the API, which also parses returned bounce reports and spam complaints. Server, reverse DNS and DNS setup: [docs/PRODUCTION_INFRASTRUCTURE.md](docs/PRODUCTION_INFRASTRUCTURE.md).
+
+Test the delivery engine locally with `docker compose --profile mta up -d`, then run the API and worker with `SMTP_HOST=localhost SMTP_PORT=2525 OPS_EMAIL=ops@example.com` and `TREDMAIL_API_KEY=tred_live_... npm run test:delivery`.
+
+
+
+
+Purpose	Hostname
+Console	console.tredmail.dovepeakdigital.com
+API	api.tredmail.dovepeakdigital.com
+Tracking	track.tredmail.dovepeakdigital.com
+Sending domain	tredmail.dovepeakdigital.com
+Bounces	bounces.tredmail.dovepeakdigital.com
+Mail server	mta1.tredmail.dovepeakdigital.com
+
+
+
+
+Subject: Open outbound SMTP port 25 and set reverse DNS for VPS <SERVER_IP>
+
+Hello,
+
+We run our own transactional email server on our KVM 4 VPS (IP <SERVER_IP>). It sends account emails such as sign-up confirmations, password resets and receipts for Dovepeak Technologies' own applications. It is not used for bulk or unsolicited mail.
+
+Please could you:
+
+Allow outbound TCP port 25 from this VPS, so it can deliver mail to recipients' mail servers.
+Allow inbound TCP port 25, so it can receive bounce reports for our bounce domain.
+Set the reverse DNS (PTR) of <SERVER_IP> to mta1.tredmail.dovepeakdigital.com, if we can't set it ourselves in hPanel. The forward record mta1.tredmail.dovepeakdigital.com → <SERVER_IP> is already published.
+We follow sending best practice: SPF, DKIM and DMARC on the sending domain, a matching PTR and HELO name, automatic bounce and complaint suppression, gradual IP warm-up, and monitored postmaster@ and abuse@ addresses.
+
+Thank you,
+Dovepeak Technologies
+
+
+
+3. Namecheap
+Nameservers: keep Namecheap BasicDNS, which uses dns1.registrar-servers.com and dns2.registrar-servers.com. If it's already selected, there's nothing to change. Add the records below under Advanced DNS → Host Records; the Host field is relative to dovepeakdigital.com.
+
+Warning about MX: the MX records need Mail Settings → Custom MX, and that setting applies to the whole domain. If dovepeakdigital.com currently gets its email through Namecheap Email Forwarding or Private Email, write down those MX records first and add them back after switching.
+
+Type	Host	Value	Notes
+A	console.tredmail	<SERVER_IP>	
+A	api.tredmail	<SERVER_IP>	
+A	track.tredmail	<SERVER_IP>	
+A	mta1.tredmail	<SERVER_IP>	must match the PTR
+MX	bounces.tredmail	mta1.tredmail.dovepeakdigital.com	priority 10
+MX	tredmail	mta1.tredmail.dovepeakdigital.com	priority 10
+TXT	_spf.tredmail	v=spf1 ip4:<SERVER_IP> -all	
+TXT	tredmail	v=spf1 include:_spf.tredmail.dovepeakdigital.com ~all	
+TXT	bounces.tredmail	v=spf1 include:_spf.tredmail.dovepeakdigital.com ~all	
+TXT	mta1.tredmail	v=spf1 a -all	
+TXT	_dmarc.tredmail	v=DMARC1; p=none; rua=mailto:dmarc@tredmail.dovepeakdigital.com; adkim=r; aspf=r; pct=100	
+TXT	_smtp._tls.tredmail	v=TLSRPTv1; rua=mailto:tls-reports@tredmail.dovepeakdigital.com	
+TXT	tredmail._domainkey.tredmail	DKIM value	copy from Console → TredMail Platform → Domains after the first deploy and seed
+DMARC: keep p=none for 2 to 4 weeks, then change it to p=quarantine.
+Phase 2 records: two records for MTA-STS (encryption for mail sent to the domain) come later; I'll tell you when.
+Optional: if Dovepeak's own apps will send as @dovepeakdigital.com, those records are in the guide. That domain may have only one SPF record, so add our include: to the existing one rather than creating a second.

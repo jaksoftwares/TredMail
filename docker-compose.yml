@@ -50,7 +50,36 @@ services:
     volumes:
       - mailpit_data:/data
 
+  # KumoMTA, TredMail's delivery engine. Optional locally: `docker compose --profile mta up -d`,
+  # then set SMTP_HOST=localhost and SMTP_PORT=2525 in .env. It relays everything to Mailpit
+  # and reports deliveries and bounces to the API running on the host (port 3000).
+  kumomta:
+    image: ghcr.io/kumocorp/kumomta:2026.09.29-b90d8bc1
+    container_name: tredmail-kumomta
+    profiles: ["mta"]
+    restart: unless-stopped
+    environment:
+      TREDMAIL_API_URL: http://host.docker.internal:3000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
+      MTA_HOSTNAME: mta.localhost
+      PRIMARY_DOMAIN: ${PRIMARY_DOMAIN:-tredmail.dovepeakdigital.com}
+      BOUNCE_DOMAIN: ${BOUNCE_DOMAIN:-bounces.tredmail.dovepeakdigital.com}
+      MTA_SMART_HOST: mailpit:1025
+      # Docker Desktop forwards published ports from the host's network
+      MTA_RELAY_NETWORKS: 0.0.0.0/0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "2525:2525" # injection (the worker)
+      - "2526:25" # inbound, for testing bounce and complaint reports
+    volumes:
+      - ./mta/policy:/opt/kumomta/etc/policy:ro
+      - kumomta_spool:/var/spool/kumomta
+    depends_on:
+      - mailpit
+
 volumes:
+  kumomta_spool:
   postgres_data:
   redis_data:
   mailpit_data:

@@ -29,7 +29,7 @@ export function DovepeakEndorsement() {
   return (
     <footer className="flex flex-col items-center gap-2 text-xs text-subtle">
       <span>A product of</span>
-      <a href="https://dovepeak.com" target="_blank" rel="noreferrer" aria-label="Dovepeak Technologies">
+      <a href="https://dovepeakdigital.com" target="_blank" rel="noreferrer" aria-label="Dovepeak Technologies">
         <Image src="/brand/dovepeak-logo.svg" alt="Dovepeak Technologies" width={130} height={38} />
       </a>
       <span>© Dovepeak Technologies. All rights reserved.</span>

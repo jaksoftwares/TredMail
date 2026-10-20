@@ -1,4 +1,4 @@
-import { Worker, Job, UnrecoverableError } from "bullmq";
+import { DelayedError, Worker, Job, UnrecoverableError } from "bullmq";
 import nodemailer from "nodemailer";
 import { redisConnection } from "@tredmail/core/queue/redis";
 import { EMAIL_QUEUE_NAME, EmailJobData } from "@tredmail/core/queue/email.queue";
@@ -8,8 +8,12 @@ import { createTrackingSigner } from "@tredmail/core/security/tracking-signature
 import { prepareEmailBody } from "@tredmail/core/mail/mime";
 import { env } from "@tredmail/core/config/env";
 import { dispatchWebhookEvent } from "@tredmail/core/webhooks/dispatcher";
+import { createVerpCodec, returnPathDomainFor } from "@tredmail/core/mail/verp";
+import { msUntilNextUtcDay, reserveWarmupSlots, warmupCap } from "@tredmail/core/delivery/warmup";
+import { startMonitor } from "./monitor.js";
 
 const signer = createTrackingSigner(env.TREDMAIL_MASTER_ENCRYPTION_KEY);
+const verp = createVerpCodec(env.TREDMAIL_MASTER_ENCRYPTION_KEY);
 
 // One pooled connection set per worker process; DKIM is applied per message.
 const transporter = nodemailer.createTransport({
@@ -23,9 +27,33 @@ const transporter = nodemailer.createTransport({
   tls: { rejectUnauthorized: !env.SMTP_ALLOW_INVALID_CERTS },
 });
 
+// Optional relay through another provider for mail above the day's IP warm-up cap.
+const fallbackTransporter = env.FALLBACK_SMTP_HOST
+  ? nodemailer.createTransport({
+      pool: true,
+      maxConnections: 2,
+      host: env.FALLBACK_SMTP_HOST,
+      port: env.FALLBACK_SMTP_PORT,
+      secure: env.FALLBACK_SMTP_SECURE,
+      auth: env.FALLBACK_SMTP_USER ? { user: env.FALLBACK_SMTP_USER, pass: env.FALLBACK_SMTP_PASS } : undefined,
+    })
+  : null;
+
+type Route = "mta" | "fallback";
+
+/**
+ * Picks the route for a message: our own mail server while today's warm-up allowance lasts,
+ * then the fallback relay. Returns null when the cap is reached and there is no fallback.
+ */
+async function chooseRoute(recipientCount: number): Promise<Route | null> {
+  const cap = warmupCap(env.MTA_WARMUP_START);
+  if (await reserveWarmupSlots(redisConnection, cap, recipientCount)) return "mta";
+  return fallbackTransporter ? "fallback" : null;
+}
+
 const describe = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-async function deliver(job: Job<EmailJobData>) {
+async function deliver(job: Job<EmailJobData>, token?: string) {
   const data = job.data;
 
   const domain = await prisma.domain.findUnique({ where: { id: data.domainId } });
@@ -44,6 +72,18 @@ async function deliver(job: Job<EmailJobData>) {
     throw new UnrecoverableError(`Cannot decrypt DKIM key for ${domain.name}: ${describe(err)}`);
   }
 
+  const recipients = [...data.to, ...(data.cc ?? []), ...(data.bcc ?? [])];
+  const route = await chooseRoute(recipients.length);
+  if (!route) {
+    // Warm-up cap reached and no fallback relay: hold the message until tomorrow's allowance.
+    const delay = msUntilNextUtcDay() + Math.floor(Math.random() * 15 * 60_000);
+    await prisma.emailEvent.create({
+      data: { emailId: data.emailId, type: "DEFERRED", details: { reason: "warmup_cap_reached", retryAt: new Date(Date.now() + delay).toISOString() } },
+    });
+    await job.moveToDelayed(Date.now() + delay, token);
+    throw new DelayedError();
+  }
+
   await prisma.email.update({ where: { id: data.emailId }, data: { status: "SENDING" } });
 
   const prepared = prepareEmailBody(data.emailId, data.html, data.text, {
@@ -53,7 +93,15 @@ async function deliver(job: Job<EmailJobData>) {
     signer,
   });
 
-  const info = await transporter.sendMail({
+  // Our mail server gets a VERP envelope so bounces map back to this email. Other providers
+  // set their own return path.
+  const envelope =
+    route === "mta"
+      ? { from: verp.encode(data.emailId, returnPathDomainFor(domain, env.BOUNCE_DOMAIN)), to: recipients }
+      : undefined;
+
+  const info = await (route === "mta" ? transporter : fallbackTransporter!).sendMail({
+    envelope,
     from: data.from,
     to: data.to,
     cc: data.cc,
@@ -66,6 +114,8 @@ async function deliver(job: Job<EmailJobData>) {
     headers: {
       ...data.headers,
       "X-TredMail-ID": data.emailId,
+      // Gmail's feedback loop reports complaint rates per value: category, workspace, sender
+      "Feedback-ID": `${(data.category ?? "transactional").replace(/[^A-Za-z0-9_-]/g, "")}:${data.organizationId}:tredmail`,
     },
     attachments: data.attachments?.map((att) => ({
       filename: att.filename,
@@ -79,7 +129,8 @@ async function deliver(job: Job<EmailJobData>) {
     },
   });
 
-  // Accepted by the relay/MTA. DELIVERED is set only from MTA delivery logs (roadmap Phase 2).
+  // Accepted by the mail server. DELIVERED comes later from KumoMTA's delivery log; mail sent
+  // through the fallback relay stays SENT (that provider's events are not collected).
   const sentAt = new Date();
   await prisma.$transaction([
     prisma.email.update({
@@ -91,6 +142,7 @@ async function deliver(job: Job<EmailJobData>) {
         emailId: data.emailId,
         type: "SENT",
         details: {
+          route,
           smtpResponse: info.response,
           accepted: info.accepted.map(String),
           rejected: info.rejected.map(String),
@@ -115,6 +167,8 @@ export const emailWorker = new Worker<EmailJobData>(EMAIL_QUEUE_NAME, deliver, {
   connection: redisConnection,
   concurrency: 10,
 });
+
+const monitor = startMonitor();
 
 emailWorker.on("completed", (job) => {
   console.log(`[worker] sent ${job.id}`);
@@ -162,12 +216,17 @@ emailWorker.on("failed", async (job, err) => {
 });
 
 const shutdown = async () => {
-  await emailWorker.close();
+  await Promise.allSettled([emailWorker.close(), monitor.close()]);
   transporter.close();
+  fallbackTransporter?.close();
   await Promise.allSettled([prisma.$disconnect(), redisConnection.quit()]);
   process.exit(0);
 };
 process.on("SIGTERM", () => void shutdown());
 process.on("SIGINT", () => void shutdown());
 
-console.log(`[worker] TredMail delivery worker started (SMTP ${env.SMTP_HOST}:${env.SMTP_PORT})`);
+const cap = warmupCap(env.MTA_WARMUP_START);
+console.log(
+  `[worker] TredMail delivery worker started (SMTP ${env.SMTP_HOST}:${env.SMTP_PORT}; ` +
+    `warm-up ${cap === null ? "off" : `cap ${cap}/day`}; fallback ${fallbackTransporter ? env.FALLBACK_SMTP_HOST : "none"})`,
+);

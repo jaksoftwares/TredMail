@@ -21,6 +21,8 @@ export interface EmailJobData {
   }>;
   trackOpens?: boolean;
   trackClicks?: boolean;
+  /** Value of the "category" tag, used in the Feedback-ID header for Gmail's complaint reports. */
+  category?: string;
 }
 
 export const EMAIL_QUEUE_NAME = "tredmail-email-delivery";

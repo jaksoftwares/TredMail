@@ -4,9 +4,11 @@
 #   Staging:    docker compose -f docker-compose.prod.yml --env-file .env.staging \
 #                 --profile staging-relay up -d --build
 #
-# Staging runs the same images with SMTP_HOST=mailpit, so every email is captured instead of
-# delivered. Production needs an MTA (roadmap Phase 2) before it can deliver real mail.
-# Container names come from the compose project (-p), so stacks do not collide.
+# Production adds `--profile mta`, which starts KumoMTA (the delivery engine, port 25); the
+# worker hands mail to it on the internal port 2525. Staging runs the same images with
+# SMTP_HOST=mailpit, so every email is captured instead of delivered, and never binds port 25.
+# deploy-hostinger.sh picks the right profile. Container names come from the compose project
+# (-p), so stacks do not collide.
 
 x-backend-env: &backend-env
   NODE_ENV: production
@@ -17,13 +19,25 @@ x-backend-env: &backend-env
   API_BASE_URL: https://${API_DOMAIN:?set API_DOMAIN}/v1
   TRACKING_BASE_URL: https://${TRACKING_DOMAIN:?set TRACKING_DOMAIN}/v1/track
   CONSOLE_URL: https://${CONSOLE_DOMAIN:?set CONSOLE_DOMAIN}
-  PRIMARY_DOMAIN: ${PRIMARY_DOMAIN:-tredmail.dovepeak.com}
+  PRIMARY_DOMAIN: ${PRIMARY_DOMAIN:-tredmail.dovepeakdigital.com}
   TRACKING_DOMAIN: ${TRACKING_DOMAIN}
-  BOUNCE_DOMAIN: ${BOUNCE_DOMAIN:-bounces.tredmail.dovepeak.com}
-  SMTP_HOST: ${SMTP_HOST:?set SMTP_HOST (mailpit for staging, the MTA for production)}
-  SMTP_PORT: ${SMTP_PORT:-25}
+  BOUNCE_DOMAIN: ${BOUNCE_DOMAIN:-bounces.tredmail.dovepeakdigital.com}
+  # kumomta:2525 in production, mailpit:1025 in staging
+  SMTP_HOST: ${SMTP_HOST:-kumomta}
+  SMTP_PORT: ${SMTP_PORT:-2525}
   SMTP_SECURE: ${SMTP_SECURE:-false}
   LOG_LEVEL: ${LOG_LEVEL:-info}
+  MTA_HOSTNAME: ${MTA_HOSTNAME:-mta1.tredmail.dovepeakdigital.com}
+  # Alerts and forwarded postmaster@/abuse@/dmarc@ mail go here
+  OPS_EMAIL: ${OPS_EMAIL:-}
+  # First day of IP warm-up (YYYY-MM-DD); leave empty once warm-up is over
+  MTA_WARMUP_START: ${MTA_WARMUP_START:-}
+  # Optional backup provider for mail above the warm-up cap
+  FALLBACK_SMTP_HOST: ${FALLBACK_SMTP_HOST:-}
+  FALLBACK_SMTP_PORT: ${FALLBACK_SMTP_PORT:-587}
+  FALLBACK_SMTP_SECURE: ${FALLBACK_SMTP_SECURE:-false}
+  FALLBACK_SMTP_USER: ${FALLBACK_SMTP_USER:-}
+  FALLBACK_SMTP_PASS: ${FALLBACK_SMTP_PASS:-}
 
 services:
   postgres:
@@ -95,6 +109,33 @@ services:
     depends_on:
       api: { condition: service_healthy }
 
+  # Delivery engine. Port 25 is public (bounces, complaints, postmaster@ mail); the worker
+  # injects on 2525, which is reachable only inside this Docker network.
+  kumomta:
+    image: ghcr.io/kumocorp/kumomta:2026.09.29-b90d8bc1
+    profiles: ["mta"]
+    restart: always
+    depends_on:
+      api: { condition: service_healthy }
+    environment:
+      TREDMAIL_API_URL: http://api:3000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN}
+      MTA_HOSTNAME: ${MTA_HOSTNAME:-mta1.tredmail.dovepeakdigital.com}
+      PRIMARY_DOMAIN: ${PRIMARY_DOMAIN:-tredmail.dovepeakdigital.com}
+      BOUNCE_DOMAIN: ${BOUNCE_DOMAIN:-bounces.tredmail.dovepeakdigital.com}
+      MTA_RELAY_NETWORKS: ${MTA_RELAY_NETWORKS:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
+    ports:
+      - "25:25"
+    volumes:
+      - ./mta/policy:/opt/kumomta/etc/policy:ro
+      - kumomta_spool:/var/spool/kumomta
+      - kumomta_logs:/var/log/kumomta
+    healthcheck:
+      test: ["CMD", "bash", "-c", "</dev/tcp/127.0.0.1/2525"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+
   caddy:
     image: caddy:2-alpine
     restart: always
@@ -123,6 +164,8 @@ services:
       MP_MAX_MESSAGES: 5000
 
 volumes:
+  kumomta_spool:
+  kumomta_logs:
   postgres_data:
   redis_data:
   caddy_data:

@@ -28,20 +28,20 @@ describe("prepareEmailBody", () => {
   it("rewrites links to signed redirects and adds a signed pixel", () => {
     const { html } = prepareEmailBody(
       "e1",
-      '<html><body><a href="https://dovepeak.com/a?x=1&amp;y=2">Go</a></body></html>',
+      '<html><body><a href="https://dovepeakdigital.com/a?x=1&amp;y=2">Go</a></body></html>',
       undefined,
       { trackingBaseUrl: base, signer }
     );
     const href = html!.match(/href="([^"]+)"/)![1].replace(/&amp;/g, "&");
     const url = new URL(href);
     expect(url.pathname).toBe("/v1/track/click/e1");
-    expect(url.searchParams.get("url")).toBe("https://dovepeak.com/a?x=1&y=2");
+    expect(url.searchParams.get("url")).toBe("https://dovepeakdigital.com/a?x=1&y=2");
     expect(signer.verifyClick("e1", url.searchParams.get("url")!, url.searchParams.get("sig")!)).toBe(true);
     expect(html).toMatch(/<img src="https:\/\/track\.example\.com\/v1\/track\/open\/e1\?sig=[^"]+"[^>]*\/><\/body>/);
   });
 
   it("leaves content untouched when tracking is off", () => {
-    const input = '<a href="https://dovepeak.com">x</a>';
+    const input = '<a href="https://dovepeakdigital.com">x</a>';
     const { html } = prepareEmailBody("e1", input, "t", {
       trackOpens: false,
       trackClicks: false,

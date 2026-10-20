@@ -14,6 +14,7 @@ import { trackingRoutes } from "./routes/tracking.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { suppressionRoutes } from "./routes/suppressions.js";
 import { bounceRoutes } from "./routes/bounces.js";
+import { mtaRoutes } from "./routes/mta.js";
 import { accountRoutes, invitationLookupRoute, workspaceRoutes } from "./routes/account.js";
 import { authHandlerRoutes } from "./routes/auth-handler.js";
 
@@ -91,6 +92,7 @@ export async function buildServer() {
   // Internal MTA callbacks, only when an internal token is configured.
   if (env.INTERNAL_API_TOKEN) {
     await fastify.register(bounceRoutes, { prefix: "/internal/bounces" });
+    await fastify.register(mtaRoutes, { prefix: "/internal/mta" });
   }
 
   return fastify;

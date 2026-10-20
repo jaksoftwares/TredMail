@@ -108,9 +108,9 @@ For Dovepeak to send professional emails without landing in spam, domains must b
    - TredMail generates a unique 2048-bit RSA keypair.
    - Private key is encrypted with AES-256-GCM and stored in PostgreSQL.
    - Public key is formatted as a DNS TXT record for DKIM: `tredmail._domainkey.acme.com`.
-   - TredMail defines the recommended SPF record: `v=spf1 include:_spf.tredmail.dovepeak.com ~all`.
-   - TredMail defines the DMARC record: `v=DMARC1; p=quarantine; rua=mailto:dmarc@tredmail.dovepeak.com`.
-   - TredMail defines the Return-Path CNAME: `bounces.acme.com -> bounces.tredmail.dovepeak.com`.
+   - TredMail defines the recommended SPF record: `v=spf1 include:_spf.tredmail.dovepeakdigital.com ~all`.
+   - TredMail defines the DMARC record: `v=DMARC1; p=quarantine; rua=mailto:dmarc@tredmail.dovepeakdigital.com`.
+   - TredMail defines the Return-Path CNAME: `bounces.acme.com -> bounces.tredmail.dovepeakdigital.com`.
 2. The Verification Worker periodically queries public DNS servers using Node.js `dns.promises.resolveTxt` and `resolveCname`. Once all 4 records match, the domain status flips to `verified`.
 
 ### 3.3 Email Worker & DKIM Signer
@@ -124,10 +124,10 @@ For Dovepeak to send professional emails without landing in spam, domains must b
 * Hands the complete signed MIME stream to the MTA (via local SMTP or direct queue).
 
 ### 3.4 Tracking & Feedback Pipeline
-* **Open Tracking**: Embeds an invisible 1x1 transparent GIF (`<img src="https://track.tredmail.dovepeak.com/open/msg_abc123" width="1" height="1" />`).
-* **Click Tracking**: Rewrites hyperlinks (`<a href="https://track.tredmail.dovepeak.com/click/msg_abc123?target=https%3A%2F%2Fmyapp.com">`). When clicked, records the event in PostgreSQL, issues a 302 redirect, and dispatches a webhook.
+* **Open Tracking**: Embeds an invisible 1x1 transparent GIF (`<img src="https://track.tredmail.dovepeakdigital.com/open/msg_abc123" width="1" height="1" />`).
+* **Click Tracking**: Rewrites hyperlinks (`<a href="https://track.tredmail.dovepeakdigital.com/click/msg_abc123?target=https%3A%2F%2Fmyapp.com">`). When clicked, records the event in PostgreSQL, issues a 302 redirect, and dispatches a webhook.
 * **Bounce Handling**:
-  - Receiving mail servers send non-delivery notifications (DSN / RFC 3464) to the envelope `Return-Path` (`bounces@bounces.tredmail.dovepeak.com`).
+  - Receiving mail servers send non-delivery notifications (DSN / RFC 3464) to the envelope `Return-Path` (`bounces@bounces.tredmail.dovepeakdigital.com`).
   - The inbound bounce listener parses the recipient, bounce code (e.g. `550 5.1.1 User unknown`), categorizes it as **Hard Bounce** or **Soft Bounce**, writes to the `suppressions` table, and emits a `email.bounced` webhook.
 
 ---

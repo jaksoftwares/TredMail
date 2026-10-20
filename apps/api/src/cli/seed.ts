@@ -4,7 +4,7 @@
  * Creates:
  *  - the platform workspace, which owns TredMail's own sending domain (PRIMARY_DOMAIN) used
  *    for account emails (no-reply@) and the sandbox sender (onboarding@)
- *  - the Dovepeak workspace on the unlimited internal plan, with dovepeak.com
+ *  - the Dovepeak workspace on the unlimited internal plan, with dovepeakdigital.com
  *  - an owner login for both (SEED_ADMIN_EMAIL), with a generated password shown once
  *  - a full-access API key for the Dovepeak workspace, shown once
  *
@@ -21,7 +21,7 @@ import { generateDkimKeypair } from "@tredmail/core/security/dkim-keys";
 import { generateExpectedDnsRecords } from "@tredmail/core/dns/generator";
 
 const markVerified = env.NODE_ENV === "development";
-const adminEmail = (process.env.SEED_ADMIN_EMAIL ?? "admin@dovepeak.com").toLowerCase();
+const adminEmail = (process.env.SEED_ADMIN_EMAIL ?? "admin@dovepeakdigital.com").toLowerCase();
 
 async function ensureWorkspace(slug: string, name: string): Promise<Organization> {
   return prisma.organization.upsert({
@@ -103,7 +103,7 @@ async function main() {
 
   const dovepeak = await ensureWorkspace("dovepeak", "Dovepeak Technologies");
   console.log(`- workspace: ${dovepeak.slug}`);
-  await ensureDomain(dovepeak.id, "dovepeak.com");
+  await ensureDomain(dovepeak.id, "dovepeakdigital.com");
 
   console.log("- owner");
   await ensureAdmin([platform.id, dovepeak.id]);

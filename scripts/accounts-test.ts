@@ -13,7 +13,7 @@ import crypto from "node:crypto";
 const API_URL = (process.env.TREDMAIL_API_URL ?? "http://localhost:3000").replace(/\/+$/, "");
 const MAILPIT_URL = (process.env.MAILPIT_URL ?? "http://localhost:8035").replace(/\/+$/, "");
 const CONSOLE_ORIGIN = process.env.CONSOLE_ORIGIN ?? "http://localhost:3010";
-const PLATFORM_DOMAIN = process.env.PRIMARY_DOMAIN ?? "tredmail.dovepeak.com";
+const PLATFORM_DOMAIN = process.env.PRIMARY_DOMAIN ?? "tredmail.dovepeakdigital.com";
 
 type Json = Record<string, any>;
 

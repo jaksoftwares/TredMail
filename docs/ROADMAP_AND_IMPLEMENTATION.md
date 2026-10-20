@@ -19,9 +19,9 @@ Establish a clean, dedicated server capable of outbound SMTP on Port 25 with For
    - Ensure the IP is not on any active blacklist.
 3. **Configure Reverse DNS (PTR)**:
    - In cloud console (Hetzner/OVH), configure the IPv4 Reverse DNS to point to:
-     `mail.tredmail.dovepeak.com`.
+     `mail.tredmail.dovepeakdigital.com`.
    - In your primary DNS provider (e.g. Cloudflare), create an `A` record:
-     `mail.tredmail.dovepeak.com -> <YOUR_SERVER_IP>`.
+     `mail.tredmail.dovepeakdigital.com -> <YOUR_SERVER_IP>`.
    - Verify using `dig -x <YOUR_SERVER_IP> +short`.
 4. **Unblock Port 25**:
    - If using Hetzner or Linode, submit a brief support ticket requesting Port 25 outbound unblock for business transactional emails.
@@ -103,7 +103,7 @@ Accept API requests, buffer in Redis, compile valid RFC 5322 MIME messages with 
 3. **MIME Compiler (Nodemailer / Mailcomposer)**:
    - Construct RFC-compliant multipart email (HTML + Plaintext + Attachments).
    - Inject required headers:
-     - `Message-ID: <unique_id@mail.tredmail.dovepeak.com>`
+     - `Message-ID: <unique_id@mail.tredmail.dovepeakdigital.com>`
      - `Date`
      - `List-Unsubscribe` & `List-Unsubscribe-Post` (One-Click)
 4. **DKIM Cryptographic Signer**:
@@ -121,7 +121,7 @@ Provide real-time visibility into email opens, link clicks, deliveries, and boun
 
 ### Execution Steps
 1. **Tracking Server**:
-   - Mount lightweight HTTP endpoints on `track.tredmail.dovepeak.com`:
+   - Mount lightweight HTTP endpoints on `track.tredmail.dovepeakdigital.com`:
      - `GET /open/:emailId`: Returns 1x1 transparent GIF (`Content-Type: image/gif`), records `OPENED` event with timestamp, IP, and user-agent.
      - `GET /click/:emailId?url=...`: Logs `CLICKED` event and issues HTTP 302 redirect.
 2. **Inbound Bounce & Feedback Loop Handler**:

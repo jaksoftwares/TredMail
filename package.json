@@ -27,7 +27,8 @@
     "db:seed": "npm run seed -w @tredmail/api",
     "keys:revoke": "npm run keys:revoke -w @tredmail/api --",
     "test:accounts": "tsx scripts/accounts-test.ts",
-    "build:console": "npm run build --prefix apps/console"
+    "build:console": "npm run build --prefix apps/console",
+    "test:delivery": "tsx scripts/delivery-test.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

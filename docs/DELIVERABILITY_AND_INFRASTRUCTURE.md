@@ -20,8 +20,8 @@ Mail servers communicate over **Port 25 (SMTP)**. Most modern cloud providers (A
 ### 1.2 Dedicated IP Reputation & rDNS (PTR Record)
 1. **Never use shared or "dirty" IPs**: Before accepting a server IP, test it against global DNS blacklists using tools like [Spamhaus](https://www.spamhaus.org/), [Barracuda](https://www.barracudacentral.org/), and [MXToolbox](https://mxtoolbox.com/blacklists.aspx).
 2. **Reverse DNS (PTR Record)**:
-   - A forward DNS record points a hostname to an IP: `mail.tredmail.dovepeak.com -> 198.51.100.25`.
-   - The PTR record **MUST** resolve the IP back to the exact same hostname: `198.51.100.25 -> mail.tredmail.dovepeak.com`.
+   - A forward DNS record points a hostname to an IP: `mail.tredmail.dovepeakdigital.com -> 198.51.100.25`.
+   - The PTR record **MUST** resolve the IP back to the exact same hostname: `198.51.100.25 -> mail.tredmail.dovepeakdigital.com`.
    - Both forward and reverse records must match (`FCrDNS` - Forward-Confirmed Reverse DNS).
    - *Failure to configure rDNS will result in 100% rejection by Google, Microsoft, and Yahoo.*
 
@@ -43,10 +43,10 @@ flowchart TD
 
 ### 2.1 SPF (Sender Policy Framework)
 * **Type**: `TXT`
-* **Name**: `@` (or sending domain, e.g. `dovepeak.com`)
+* **Name**: `@` (or sending domain, e.g. `dovepeakdigital.com`)
 * **Value**:
   ```text
-  v=spf1 include:_spf.tredmail.dovepeak.com ~all
+  v=spf1 include:_spf.tredmail.dovepeakdigital.com ~all
   ```
 * **Explanation**: Declares that servers authorized in Dovepeak's SPF include record have permission to transmit messages on behalf of the domain.
 
@@ -69,18 +69,18 @@ flowchart TD
 * **Name**: `_dmarc.yourdomain.com`
 * **Value (Initial - Monitoring Phase)**:
   ```text
-  v=DMARC1; p=none; rua=mailto:dmarc-reports@tredmail.dovepeak.com; pct=100;
+  v=DMARC1; p=none; rua=mailto:dmarc-reports@tredmail.dovepeakdigital.com; pct=100;
   ```
 * **Value (Production - Enforced Phase)**:
   ```text
-  v=DMARC1; p=quarantine; rua=mailto:dmarc-reports@tredmail.dovepeak.com; pct=100;
+  v=DMARC1; p=quarantine; rua=mailto:dmarc-reports@tredmail.dovepeakdigital.com; pct=100;
   ```
 * **Explanation**: Instructs receiving inboxes on how to handle emails that fail SPF or DKIM checks, preventing impersonation and phishing.
 
 ### 2.4 Custom Return-Path (Envelope-From / Bounce CNAME)
 * **Type**: `CNAME`
 * **Name**: `bounces.yourdomain.com`
-* **Value**: `bounces.tredmail.dovepeak.com`
+* **Value**: `bounces.tredmail.dovepeakdigital.com`
 * **Explanation**: Allows TredMail to receive asynchronous delivery status notifications (DSN / bounces) directly and ensures SPF alignment passes on the Return-Path.
 
 ---
@@ -96,7 +96,7 @@ As of early 2024, Google (Gmail) and Yahoo enforce strict requirements for all s
    For marketing or batch mailings, TredMail must automatically append these headers:
    ```http
    List-Unsubscribe-Post: List-Unsubscribe=One-Click
-   List-Unsubscribe: <https://track.tredmail.dovepeak.com/unsubscribe/token123>, <mailto:unsubscribe@bounces.tredmail.dovepeak.com?subject=unsubscribe-token123>
+   List-Unsubscribe: <https://track.tredmail.dovepeakdigital.com/unsubscribe/token123>, <mailto:unsubscribe@bounces.tredmail.dovepeakdigital.com?subject=unsubscribe-token123>
    ```
 5. **TLS Encryption**: Outbound SMTP connections must negotiate TLS (STARTTLS).
 6. **Matching Forward and Reverse DNS (rDNS)**.

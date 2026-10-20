@@ -6,6 +6,7 @@
  * image has alt text so the email still reads correctly when images are blocked.
  */
 
+import { COMPANY } from "../config/company.js";
 import { env } from "../config/env.js";
 
 export interface RenderedEmail {
@@ -55,7 +56,7 @@ function layout(options: { preheader: string; heading: string; paragraphs: strin
   </table>
   <p style="margin:24px 0 8px;font-size:12px;color:#6b6b85;">A product of</p>
   <img src="${brandUrl}/email-dovepeak-logo.png" width="140" height="41" alt="Dovepeak Technologies" style="display:block;border:0;margin:0 auto;" />
-  <p style="margin:12px 0 0;font-size:12px;color:#6b6b85;">TredMail by Dovepeak Technologies · Transactional email infrastructure</p>
+  <p style="margin:12px 0 0;font-size:12px;line-height:1.5;color:#6b6b85;">TredMail by ${COMPANY.name} · Transactional email infrastructure<br>${escapeHtml(COMPANY.postalAddress)}</p>
 </td></tr></table>
 </body></html>`;
 }
@@ -122,5 +123,18 @@ export function sandboxWelcomeTemplate(params: { workspaceName: string }): Rende
       ],
     }),
     text: `${heading}\n\n${intro}\n\nThe sandbox can send only to your workspace members. Verify your own domain to send to anyone.`,
+  };
+}
+
+export function operationsAlertTemplate(params: { title: string; summary: string; details: string[] }): RenderedEmail {
+  return {
+    subject: `[TredMail alert] ${params.title}`,
+    html: layout({
+      preheader: params.summary,
+      heading: params.title,
+      paragraphs: [params.summary, ...params.details],
+      footnote: "You receive this because your address is TredMail's operations contact (OPS_EMAIL). Repeat alerts are held back for 6 hours.",
+    }),
+    text: `${params.title}\n\n${params.summary}\n\n${params.details.join("\n")}`,
   };
 }
