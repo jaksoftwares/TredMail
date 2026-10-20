@@ -28,8 +28,9 @@ const envSchema = z
       .string()
       .regex(/^[0-9a-fA-F]{64}$/, "must be 64 hex characters (openssl rand -hex 32)"),
 
-    // Signs and encrypts console sessions (Better Auth). openssl rand -hex 32
-    BETTER_AUTH_SECRET: z.string().min(32, "must be at least 32 characters (openssl rand -hex 32)"),
+    // Signs and encrypts console sessions (Better Auth). Only the API needs it; the API
+    // refuses to start without it. openssl rand -hex 32
+    BETTER_AUTH_SECRET: z.string().min(32, "must be at least 32 characters (openssl rand -hex 32)").optional(),
     // Optional Google sign-in; both must be set to enable it
     GOOGLE_CLIENT_ID: z.string().optional(),
     GOOGLE_CLIENT_SECRET: z.string().optional(),
@@ -73,13 +74,6 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ["TREDMAIL_MASTER_ENCRYPTION_KEY"],
         message: "is the public sample key; generate a new one with `openssl rand -hex 32`",
-      });
-    }
-    if (!cfg.INTERNAL_API_TOKEN) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["INTERNAL_API_TOKEN"],
-        message: "is required in production",
       });
     }
     if (!cfg.TRACKING_BASE_URL) {
@@ -131,6 +125,19 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
       .map((origin) => origin.trim())
       .filter(Boolean),
   };
+}
+
+/**
+ * Secrets only the API process uses. The worker never receives them, so they are checked
+ * when the API starts rather than in the shared schema.
+ */
+export function assertApiSecrets(cfg: Env): void {
+  const missing: string[] = [];
+  if (!cfg.BETTER_AUTH_SECRET) missing.push("BETTER_AUTH_SECRET is required to run the API");
+  if (cfg.NODE_ENV === "production" && !cfg.INTERNAL_API_TOKEN) missing.push("INTERNAL_API_TOKEN is required in production");
+  if (missing.length > 0) {
+    throw new Error(`Invalid TredMail API configuration:\n${missing.map((m) => `  - ${m}`).join("\n")}`);
+  }
 }
 
 export const env = loadEnv();

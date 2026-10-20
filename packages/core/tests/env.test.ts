@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadEnv } from "../src/config/env.js";
+import { assertApiSecrets, loadEnv } from "../src/config/env.js";
 
 const base = {
   DATABASE_URL: "postgresql://x",
@@ -28,8 +28,18 @@ describe("loadEnv", () => {
       TREDMAIL_MASTER_ENCRYPTION_KEY: "0123456789abcdef".repeat(4), // gitleaks:allow (public sample key under test)
     });
     expect(error).toMatch(/public sample key/);
-    expect(error).toMatch(/INTERNAL_API_TOKEN/);
     expect(error).toMatch(/TRACKING_BASE_URL/);
+  });
+
+  it("lets the worker start without API-only secrets, but not the API", () => {
+    const cfg = loadEnv({
+      DATABASE_URL: "postgresql://x",
+      TREDMAIL_MASTER_ENCRYPTION_KEY: "d".repeat(64),
+      NODE_ENV: "production",
+      TRACKING_BASE_URL: "https://track.example.com/v1/track",
+    });
+    expect(() => assertApiSecrets(cfg)).toThrow(/BETTER_AUTH_SECRET[\s\S]*INTERNAL_API_TOKEN/);
+    expect(() => assertApiSecrets({ ...cfg, BETTER_AUTH_SECRET: "s".repeat(64), INTERNAL_API_TOKEN: "t".repeat(64) })).not.toThrow();
   });
 
   it("derives tracking URL and CORS origins in development", () => {

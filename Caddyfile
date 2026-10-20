@@ -1,14 +1,44 @@
-# Caddy Configuration for TredMail Production
-# Automatically provisions free, auto-renewing Let's Encrypt TLS certificates
+# TredMail edge: automatic HTTPS (Let's Encrypt) and routing.
 
-# 1. API & Tracking Gateway
-{$API_DOMAIN:api.tredmail.dovepeak.com}, {$TRACKING_DOMAIN:track.tredmail.dovepeak.com} {
-    reverse_proxy api:3000
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
 }
 
-# 2. Web Console Dashboard
-{$CONSOLE_DOMAIN:console.tredmail.dovepeak.com} {
-    root * /app/console/dist
-    file_server
-    try_files {path} /index.html
+# Console. Auth (/api/auth) and API calls (/v1) go straight to the API on the same origin,
+# so session cookies stay first-party; everything else is the Next.js app.
+{$CONSOLE_DOMAIN} {
+	import security_headers
+	encode zstd gzip
+
+	@backend path /api/* /v1/*
+	handle @backend {
+		reverse_proxy api:3000
+	}
+	handle {
+		reverse_proxy console:3000
+	}
+}
+
+# Public API for applications and SDKs
+{$API_DOMAIN} {
+	import security_headers
+	encode zstd gzip
+	reverse_proxy api:3000
+}
+
+# Open and click tracking links embedded in emails
+{$TRACKING_DOMAIN} {
+	import security_headers
+	@tracking path /v1/track/*
+	handle @tracking {
+		reverse_proxy api:3000
+	}
+	handle {
+		respond 404
+	}
 }

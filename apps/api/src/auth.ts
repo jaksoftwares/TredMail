@@ -2,9 +2,11 @@ import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { twoFactor } from "better-auth/plugins/two-factor";
 import { prisma } from "@tredmail/db";
-import { env } from "@tredmail/core/config/env";
+import { assertApiSecrets, env } from "@tredmail/core/config/env";
 import { resetPasswordTemplate, verifyEmailTemplate } from "@tredmail/core/mail/templates";
 import { sendSystemEmail } from "@tredmail/core/services/system-mailer";
+
+assertApiSecrets(env);
 
 const googleEnabled = Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
 
@@ -26,7 +28,7 @@ export const auth = betterAuth({
   appName: "TredMail",
   baseURL: env.CONSOLE_URL,
   basePath: "/api/auth",
-  secret: env.BETTER_AUTH_SECRET,
+  secret: env.BETTER_AUTH_SECRET!,
   database: prismaAdapter(prisma, { provider: "postgresql" }),
   trustedOrigins: env.CORS_ORIGIN_LIST,
   telemetry: { enabled: false },

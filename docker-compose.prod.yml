@@ -1,120 +1,128 @@
+# TredMail production and staging stack.
+#
+#   Production: docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+#   Staging:    docker compose -f docker-compose.prod.yml --env-file .env.staging \
+#                 --profile staging-relay up -d --build
+#
+# Staging runs the same images with SMTP_HOST=mailpit, so every email is captured instead of
+# delivered. Production needs an MTA (roadmap Phase 2) before it can deliver real mail.
+# Container names come from the compose project (-p), so stacks do not collide.
+
+x-backend-env: &backend-env
+  NODE_ENV: production
+  DATABASE_URL: postgresql://${POSTGRES_USER:-tredmail}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tredmail}?schema=public
+  REDIS_URL: redis://redis:6379
+  TREDMAIL_MASTER_ENCRYPTION_KEY: ${TREDMAIL_MASTER_ENCRYPTION_KEY:?set TREDMAIL_MASTER_ENCRYPTION_KEY}
+  # Links embedded in emails must use public URLs, never localhost
+  API_BASE_URL: https://${API_DOMAIN:?set API_DOMAIN}/v1
+  TRACKING_BASE_URL: https://${TRACKING_DOMAIN:?set TRACKING_DOMAIN}/v1/track
+  CONSOLE_URL: https://${CONSOLE_DOMAIN:?set CONSOLE_DOMAIN}
+  PRIMARY_DOMAIN: ${PRIMARY_DOMAIN:-tredmail.dovepeak.com}
+  TRACKING_DOMAIN: ${TRACKING_DOMAIN}
+  BOUNCE_DOMAIN: ${BOUNCE_DOMAIN:-bounces.tredmail.dovepeak.com}
+  SMTP_HOST: ${SMTP_HOST:?set SMTP_HOST (mailpit for staging, the MTA for production)}
+  SMTP_PORT: ${SMTP_PORT:-25}
+  SMTP_SECURE: ${SMTP_SECURE:-false}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
 services:
-  # Primary Database
   postgres:
     image: postgres:16-alpine
-    container_name: tredmail-postgres-prod
     restart: always
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-tredmail}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-tredmail_prod_db}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-tredmail}
     volumes:
-      - postgres_data_prod:/var/lib/postgresql/data
-    networks:
-      - tredmail_network
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
-  # Redis for Ingestion Queues
   redis:
     image: redis:7-alpine
-    container_name: tredmail-redis-prod
     restart: always
+    command: ["redis-server", "--appendonly", "yes"]
     volumes:
-      - redis_data_prod:/data
-    networks:
-      - tredmail_network
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
-  # TredMail API Gateway
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: tredmail-api-prod
+    build: { context: ., dockerfile: Dockerfile }
+    image: tredmail-backend:${TREDMAIL_VERSION:-latest}
     restart: always
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
     environment:
-      NODE_ENV: production
+      <<: *backend-env
       PORT: 3000
-      DATABASE_URL: postgresql://${POSTGRES_USER:-tredmail}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tredmail_prod_db}?schema=public
-      REDIS_URL: redis://redis:6379
-      TREDMAIL_MASTER_ENCRYPTION_KEY: ${TREDMAIL_MASTER_ENCRYPTION_KEY:?set TREDMAIL_MASTER_ENCRYPTION_KEY in .env}
-      API_BASE_URL: https://${API_DOMAIN:-api.tredmail.dovepeak.com}/v1
-      TRACKING_BASE_URL: https://${TRACKING_DOMAIN:-track.tredmail.dovepeak.com}/v1/track
-      CONSOLE_URL: https://${CONSOLE_DOMAIN:-console.tredmail.dovepeak.com}
-      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
       TRUST_PROXY: "true"
-      PRIMARY_DOMAIN: ${PRIMARY_DOMAIN:-tredmail.dovepeak.com}
-      TRACKING_DOMAIN: ${TRACKING_DOMAIN:-track.tredmail.dovepeak.com}
-      BOUNCE_DOMAIN: ${BOUNCE_DOMAIN:-bounces.tredmail.dovepeak.com}
-      SMTP_HOST: ${SMTP_HOST:-127.0.0.1}
-      SMTP_PORT: ${SMTP_PORT:-25}
-      SMTP_SECURE: "false"
-    networks:
-      - tredmail_network
+      CORS_ORIGINS: https://${CONSOLE_DOMAIN}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      SANDBOX_DAILY_LIMIT: ${SANDBOX_DAILY_LIMIT:-50}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
 
-  # TredMail Email Delivery Worker (Processes BullMQ queue & signs DKIM)
   worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: tredmail-backend:${TREDMAIL_VERSION:-latest}
     command: ["node", "apps/worker/dist/index.js"]
-    container_name: tredmail-worker-prod
     restart: always
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      api: { condition: service_healthy }
     environment:
-      NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-tredmail}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tredmail_prod_db}?schema=public
-      REDIS_URL: redis://redis:6379
-      TREDMAIL_MASTER_ENCRYPTION_KEY: ${TREDMAIL_MASTER_ENCRYPTION_KEY:?set TREDMAIL_MASTER_ENCRYPTION_KEY in .env}
-      # Links embedded in emails must use public URLs, never localhost
-      API_BASE_URL: https://${API_DOMAIN:-api.tredmail.dovepeak.com}/v1
-      TRACKING_BASE_URL: https://${TRACKING_DOMAIN:-track.tredmail.dovepeak.com}/v1/track
-      SMTP_HOST: ${SMTP_HOST:-127.0.0.1}
-      SMTP_PORT: ${SMTP_PORT:-25}
-      SMTP_SECURE: "false"
-    networks:
-      - tredmail_network
+      <<: *backend-env
 
-  # Caddy Reverse Proxy (Automatic Let's Encrypt SSL & Routing)
+  console:
+    build:
+      context: apps/console
+      args:
+        NEXT_PUBLIC_GOOGLE_SIGN_IN: ${GOOGLE_SIGN_IN_ENABLED:-false}
+    restart: always
+    depends_on:
+      api: { condition: service_healthy }
+
   caddy:
     image: caddy:2-alpine
-    container_name: tredmail-caddy-prod
     restart: always
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      CONSOLE_DOMAIN: ${CONSOLE_DOMAIN}
+      API_DOMAIN: ${API_DOMAIN}
+      TRACKING_DOMAIN: ${TRACKING_DOMAIN}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-    networks:
-      - tredmail_network
     depends_on:
       - api
+      - console
+
+  # Staging only: catches every outbound email. Its web UI is not published; reach it with
+  # an SSH tunnel: ssh -L 8025:<mailpit container IP>:8025 or `docker compose port`.
+  mailpit:
+    image: axllent/mailpit:v1.27
+    profiles: ["staging-relay"]
+    restart: always
+    environment:
+      MP_MAX_MESSAGES: 5000
 
 volumes:
-  postgres_data_prod:
-  redis_data_prod:
+  postgres_data:
+  redis_data:
   caddy_data:
   caddy_config:
-
-networks:
-  tredmail_network:
-    driver: bridge

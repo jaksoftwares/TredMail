@@ -4,6 +4,8 @@
 # Build: install the workspace, generate Prisma, bundle the apps
 # ---------------------------------------------------------------
 FROM node:22-alpine AS builder
+# Prisma's engines need OpenSSL on Alpine; it must be present before npm installs them.
+RUN apk add --no-cache openssl
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -24,6 +26,7 @@ RUN npm run db:generate && npm run build
 # Runtime: production dependencies and bundled output only
 # ---------------------------------------------------------------
 FROM node:22-alpine AS runner
+RUN apk add --no-cache openssl
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
@@ -38,7 +41,9 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 # Schema and migrations are needed at runtime for `prisma migrate deploy`.
 COPY packages/db/prisma ./packages/db/prisma
-RUN npx prisma generate --schema=packages/db/prisma/schema.prisma
+# Generate the client and fetch the migration engine now, as root, so `prisma migrate deploy`
+# works at run time for the unprivileged node user.
+RUN npx prisma generate --schema=packages/db/prisma/schema.prisma  && npx prisma -v > /dev/null
 
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
 COPY --from=builder /app/apps/worker/dist ./apps/worker/dist

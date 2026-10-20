@@ -19,7 +19,7 @@ export function generateExpectedDnsRecords(
 ): ExpectedDnsRecord[] {
   const cleanDomain = domainName.toLowerCase().trim();
 
-  return [
+  const records: ExpectedDnsRecord[] = [
     {
       recordType: "DKIM",
       type: "TXT",
@@ -41,12 +41,18 @@ export function generateExpectedDnsRecords(
       expectedValue: `v=DMARC1; p=quarantine; rua=mailto:dmarc@${env.PRIMARY_DOMAIN}; pct=100;`,
       ttl: "Auto",
     },
-    {
+  ];
+
+  // TredMail's own domain hosts the bounce endpoint itself; a CNAME to itself would be circular.
+  const returnPathName = `bounces.${cleanDomain}`;
+  if (returnPathName !== env.BOUNCE_DOMAIN.toLowerCase()) {
+    records.push({
       recordType: "RETURN_PATH",
       type: "CNAME",
-      name: `bounces.${cleanDomain}`,
+      name: returnPathName,
       expectedValue: env.BOUNCE_DOMAIN,
       ttl: "Auto",
-    },
-  ];
+    });
+  }
+  return records;
 }

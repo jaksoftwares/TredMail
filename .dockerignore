@@ -1,0 +1,10 @@
+.git
+**/node_modules
+**/dist
+apps/console
+.env
+.env.*
+!.env.example
+branding
+docs
+*.log
