@@ -1,4 +1,5 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import { authenticateInternal } from "../middleware/auth.js";
 import { z } from "zod";
 import { prisma } from "../../db/client.js";
 import { dispatchWebhookEvent } from "../../webhooks/dispatcher.js";
@@ -11,10 +12,14 @@ const bouncePayloadSchema = z.object({
   diagnostic_message: z.string().optional().default("User unknown / Address rejected"),
 });
 
+/**
+ * Internal bounce and complaint receiver, called by the MTA's feedback processor.
+ * Mounted at /internal/bounces and protected by INTERNAL_API_TOKEN; never public.
+ */
 export async function bounceRoutes(fastify: FastifyInstance) {
-  // -------------------------------------------------------------
-  // POST /v1/bounces - Inbound Bounce & DSN Receiver
-  // -------------------------------------------------------------
+  fastify.addHook("preHandler", authenticateInternal);
+
+  // POST /internal/bounces
   fastify.post("/", async (request: FastifyRequest, reply: FastifyReply) => {
     const parseResult = bouncePayloadSchema.safeParse(request.body);
     if (!parseResult.success) {
@@ -87,13 +92,13 @@ export async function bounceRoutes(fastify: FastifyInstance) {
       });
 
       // 4. Trigger Webhook
-      dispatchWebhookEvent(emailRecord.organizationId, "email.bounced", {
+      dispatchWebhookEvent(emailRecord.organizationId, bounce_type === "complaint" ? "email.complained" : "email.bounced", {
         email_id: emailRecord.id,
         recipient: cleanEmail,
         bounce_type,
         smtp_code,
         diagnostic: diagnostic_message,
-      }).catch(() => {});
+      }).catch((err) => request.log.warn({ err }, "bounce webhook dispatch failed"));
     }
 
     return reply.status(200).send({

@@ -52,23 +52,27 @@ fi
 if [ ! -f ".env" ]; then
     echo "📝 Generating production .env file from template..."
     cp .env.example .env
-    # Generate random 32-byte encryption key
-    MASTER_KEY=$(openssl rand -hex 32)
-    sed -i "s/TREDMAIL_MASTER_ENCRYPTION_KEY=.*/TREDMAIL_MASTER_ENCRYPTION_KEY=$MASTER_KEY/" .env
-    echo "🔑 Generated random master encryption key."
+    # Generate every secret; nothing from the template is reused
+    sed -i "s/^NODE_ENV=.*/NODE_ENV=production/" .env
+    sed -i "s/^TREDMAIL_MASTER_ENCRYPTION_KEY=.*/TREDMAIL_MASTER_ENCRYPTION_KEY=$(openssl rand -hex 32)/" .env
+    sed -i "s/^INTERNAL_API_TOKEN=.*/INTERNAL_API_TOKEN=$(openssl rand -hex 32)/" .env
+    echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)" >> .env
+    chmod 600 .env
+    echo "🔑 Generated master encryption key, internal API token and database password."
+    echo "   Back up .env securely: losing the master key makes stored DKIM keys unrecoverable."
 fi
 
 # 6. Launch Production Containers
 echo "🚢 Launching TredMail Production Cluster..."
 docker compose -f docker-compose.prod.yml up -d --build
 
-# 7. Sync Database Schema
-echo "🗄️ Syncing PostgreSQL Database Schema via Prisma..."
-docker compose -f docker-compose.prod.yml exec -T api npx prisma db push --schema=prisma/schema.prisma
+# 7. Apply database migrations (never `db push` in production)
+echo "🗄️ Applying database migrations..."
+docker compose -f docker-compose.prod.yml exec -T api npx prisma migrate deploy --schema=prisma/schema.prisma
 
-# 8. Seed Initial Organization & Master API Key
+# 8. Seed Initial Organization & Master API Key (prints the key once)
 echo "🌱 Initializing Dovepeak Organization..."
-docker compose -f docker-compose.prod.yml exec -T api npm run db:seed
+docker compose -f docker-compose.prod.yml exec -T api node dist/db/seed.js
 
 echo ""
 echo "=============================================================================="

@@ -4,7 +4,6 @@ import { Webhook, Plus, Trash2, Send, Copy, Check, CheckCircle2, ShieldCheck, Re
 interface WebhookItem {
   id: string;
   url: string;
-  secret: string;
   subscribed_to: string[];
   is_active: boolean;
   total_deliveries: number;
@@ -22,6 +21,8 @@ export const Webhooks: React.FC<WebhooksProps> = ({ apiKey }) => {
   const [events, setEvents] = useState<string[]>(["email.delivered", "email.bounced"]);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [pingStatus, setPingStatus] = useState<string | null>(null);
+  // The API returns a signing secret only once, when the endpoint is created.
+  const [newSecrets, setNewSecrets] = useState<Record<string, string>>({});
 
   const loadWebhooks = async () => {
     try {
@@ -51,10 +52,14 @@ export const Webhooks: React.FC<WebhooksProps> = ({ apiKey }) => {
         body: JSON.stringify({ url, subscribed_to: events }),
       });
 
+      const data = await res.json();
       if (res.ok) {
+        setNewSecrets((prev) => ({ ...prev, [data.id]: data.secret }));
         setShowAddModal(false);
         setUrl("");
         await loadWebhooks();
+      } else {
+        alert(data.message || "Could not create webhook.");
       }
     } catch (e) {
       console.error(e);
@@ -182,10 +187,11 @@ export const Webhooks: React.FC<WebhooksProps> = ({ apiKey }) => {
                     </div>
                   </td>
                   <td>
+                    {newSecrets[w.id] ? (
                     <button
                       className="btn btn-secondary btn-sm"
                       style={{ padding: "4px 8px", fontSize: "0.75rem" }}
-                      onClick={() => copySecret(w.secret, w.id)}
+                      onClick={() => copySecret(newSecrets[w.id], w.id)}
                     >
                       {copiedId === w.id ? (
                         <>
@@ -197,6 +203,9 @@ export const Webhooks: React.FC<WebhooksProps> = ({ apiKey }) => {
                         </>
                       )}
                     </button>
+                    ) : (
+                      <span style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>Shown once at creation</span>
+                    )}
                   </td>
                   <td style={{ color: "var(--text-secondary)" }}>{w.total_deliveries} events</td>
                   <td style={{ color: "var(--text-muted)", fontSize: "0.82rem" }}>

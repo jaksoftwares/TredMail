@@ -1,77 +1,63 @@
-import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { prisma } from "../../db/client.js";
-import { authenticateApiKey } from "../middleware/auth.js";
+import { authenticateApiKey, requireScope } from "../middleware/auth.js";
+
+const percent = (part: number, whole: number, digits = 1) =>
+  `${whole > 0 ? ((part / whole) * 100).toFixed(digits) : (0).toFixed(digits)}%`;
 
 export async function statsRoutes(fastify: FastifyInstance) {
   fastify.addHook("preHandler", authenticateApiKey);
+  fastify.addHook("preHandler", requireScope("stats:read"));
 
-  // -------------------------------------------------------------
-  // GET /v1/stats - Overall deliverability & engagement metrics
-  // -------------------------------------------------------------
-  fastify.get("/", async (request: FastifyRequest, reply: FastifyReply) => {
+  // GET /v1/stats - Lifetime sending and engagement metrics, plus the 10 most recent emails
+  fastify.get("/", async (request, reply) => {
     const orgId = request.organization!.id;
 
-    // 1. Total emails count
-    const totalEmails = await prisma.email.count({
-      where: { organizationId: orgId },
-    });
+    const [byStatus, uniqueOpens, uniqueClicks, recentEmails] = await Promise.all([
+      prisma.email.groupBy({ by: ["status"], where: { organizationId: orgId }, _count: { _all: true } }),
+      prisma.emailEvent.findMany({
+        where: { type: "OPENED", email: { organizationId: orgId } },
+        distinct: ["emailId"],
+        select: { emailId: true },
+      }),
+      prisma.emailEvent.findMany({
+        where: { type: "CLICKED", email: { organizationId: orgId } },
+        distinct: ["emailId"],
+        select: { emailId: true },
+      }),
+      prisma.email.findMany({
+        where: { organizationId: orgId },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        select: { id: true, from: true, to: true, subject: true, status: true, createdAt: true, deliveredAt: true },
+      }),
+    ]);
 
-    const deliveredCount = await prisma.email.count({
-      where: { organizationId: orgId, status: "DELIVERED" },
-    });
+    const count = (...statuses: string[]) =>
+      byStatus.filter((row) => statuses.includes(row.status)).reduce((sum, row) => sum + row._count._all, 0);
 
-    const bouncedCount = await prisma.email.count({
-      where: { organizationId: orgId, status: "BOUNCED" },
-    });
-
-    // 2. Event counts (Opens & Clicks)
-    const openedEvents = await prisma.emailEvent.count({
-      where: {
-        email: { organizationId: orgId },
-        type: "OPENED",
-      },
-    });
-
-    const clickedEvents = await prisma.emailEvent.count({
-      where: {
-        email: { organizationId: orgId },
-        type: "CLICKED",
-      },
-    });
-
-    // 3. Compute rates
-    const deliveryRate = totalEmails > 0 ? ((deliveredCount / totalEmails) * 100).toFixed(1) : "100.0";
-    const openRate = deliveredCount > 0 ? ((openedEvents / deliveredCount) * 100).toFixed(1) : "0.0";
-    const clickRate = deliveredCount > 0 ? ((clickedEvents / deliveredCount) * 100).toFixed(1) : "0.0";
-    const bounceRate = totalEmails > 0 ? ((bouncedCount / totalEmails) * 100).toFixed(2) : "0.00";
-
-    // 4. Recent live email feed
-    const recentEmails = await prisma.email.findMany({
-      where: { organizationId: orgId },
-      orderBy: { createdAt: "desc" },
-      take: 10,
-      select: {
-        id: true,
-        from: true,
-        to: true,
-        subject: true,
-        status: true,
-        createdAt: true,
-        deliveredAt: true,
-      },
-    });
+    const totalEmails = count("QUEUED", "SENDING", "SENT", "DELIVERED", "FAILED", "BOUNCED", "COMPLAINED");
+    // "Accepted" = handed to the MTA. Confirmed delivery needs MTA delivery logs (roadmap Phase 2).
+    const acceptedCount = count("SENT", "DELIVERED", "BOUNCED", "COMPLAINED");
+    const deliveredCount = count("DELIVERED");
+    const bouncedCount = count("BOUNCED");
+    const failedCount = count("FAILED");
+    const complainedCount = count("COMPLAINED");
 
     return reply.status(200).send({
       metrics: {
         totalEmails,
+        acceptedCount,
         deliveredCount,
         bouncedCount,
-        openedEvents,
-        clickedEvents,
-        deliveryRate: `${deliveryRate}%`,
-        openRate: `${openRate}%`,
-        clickRate: `${clickRate}%`,
-        bounceRate: `${bounceRate}%`,
+        failedCount,
+        complainedCount,
+        uniqueOpens: uniqueOpens.length,
+        uniqueClicks: uniqueClicks.length,
+        acceptedRate: percent(acceptedCount, totalEmails),
+        openRate: percent(uniqueOpens.length, acceptedCount),
+        clickRate: percent(uniqueClicks.length, acceptedCount),
+        bounceRate: percent(bouncedCount, acceptedCount, 2),
       },
       recentEmails,
     });

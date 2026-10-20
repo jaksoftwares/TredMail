@@ -10,8 +10,8 @@ COPY package*.json ./
 COPY console/package*.json ./console/
 COPY prisma ./prisma/
 
-RUN npm install
-RUN cd console && npm install
+RUN npm ci
+RUN cd console && npm ci
 
 # Copy source files
 COPY tsconfig.json ./
@@ -33,9 +33,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 
-# Install production dependencies only
+# Install production dependencies only (includes the Prisma CLI for `migrate deploy`)
 COPY package*.json ./
-RUN npm install --omit=dev
+RUN npm ci --omit=dev
 
 # Copy generated Prisma artifacts & compiled code
 COPY prisma ./prisma/
@@ -43,6 +43,8 @@ RUN npx prisma generate --schema=prisma/schema.prisma
 
 COPY --from=builder /app/dist ./dist/
 COPY --from=builder /app/console/dist ./console/dist/
+
+USER node
 
 # Expose API and Console
 EXPOSE 3000

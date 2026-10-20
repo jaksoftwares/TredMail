@@ -1,62 +1,62 @@
-import { env } from "../config/env.js";
+import type { TrackingSigner } from "../security/tracking-signature.js";
 
 export interface CompiledContent {
   html?: string;
   text?: string;
-  trackingPixelUrl?: string;
+}
+
+export interface TrackingOptions {
+  trackOpens?: boolean;
+  trackClicks?: boolean;
+  /** Public base URL of the tracking routes, e.g. https://track.tredmail.dovepeak.com/v1/track */
+  trackingBaseUrl: string;
+  signer: TrackingSigner;
 }
 
 /**
- * Prepares HTML content by injecting the 1x1 transparent tracking pixel
- * and rewriting hyperlinks for click tracking.
+ * Injects the open-tracking pixel and rewrites links for click tracking.
+ * Every generated URL carries an HMAC signature that the tracking routes verify.
  */
 export function prepareEmailBody(
   emailId: string,
-  html?: string,
-  text?: string,
-  options?: { trackOpens?: boolean; trackClicks?: boolean }
+  html: string | undefined,
+  text: string | undefined,
+  options: TrackingOptions
 ): CompiledContent {
-  const trackOpens = options?.trackOpens ?? true;
-  const trackClicks = options?.trackClicks ?? true;
+  const trackOpens = options.trackOpens ?? true;
+  const trackClicks = options.trackClicks ?? true;
 
   if (!html) {
     return { html, text };
   }
 
+  const base = options.trackingBaseUrl.replace(/\/+$/, "");
+  const encodedId = encodeURIComponent(emailId);
   let processedHtml = html;
-  const trackingBase = `${env.API_BASE_URL}/track`;
-  const trackingPixelUrl = `${trackingBase}/open/${emailId}`;
 
-  // 1. Rewrite hyperlinks if click tracking is enabled
   if (trackClicks) {
-    // Matches standard href="http(s)://..." attributes
     processedHtml = processedHtml.replace(
-      /href\s*=\s*["'](https?:\/\/[^"']+)["']/gi,
-      (match, originalUrl) => {
-        // Avoid rewriting tracking or unsubscribe URLs
-        if (originalUrl.includes("/track/")) {
+      /href\s*=\s*(["'])(https?:\/\/[^"']+)\1/gi,
+      (match, _quote: string, originalUrl: string) => {
+        if (originalUrl.startsWith(base)) {
           return match;
         }
-        const encodedUrl = encodeURIComponent(originalUrl);
-        const redirectUrl = `${trackingBase}/click/${emailId}?url=${encodedUrl}`;
-        return `href="${redirectUrl}"`;
+        // HTML attribute values may contain entities; sign and redirect to the decoded URL.
+        const targetUrl = originalUrl.replace(/&amp;/g, "&");
+        const sig = options.signer.signClick(emailId, targetUrl);
+        const redirectUrl = `${base}/click/${encodedId}?url=${encodeURIComponent(targetUrl)}&sig=${sig}`;
+        return `href="${redirectUrl.replace(/&/g, "&amp;")}"`;
       }
     );
   }
 
-  // 2. Inject transparent 1x1 GIF tracking pixel before </body> (or at end)
   if (trackOpens) {
-    const pixelTag = `<img src="${trackingPixelUrl}" width="1" height="1" border="0" alt="" style="height:1px!important;width:1px!important;border-width:0!important;margin-top:0!important;margin-bottom:0!important;margin-right:0!important;margin-left:0!important;padding-top:0!important;padding-bottom:0!important;padding-right:0!important;padding-left:0!important;display:none!important;" />`;
-    if (processedHtml.includes("</body>")) {
-      processedHtml = processedHtml.replace("</body>", `${pixelTag}</body>`);
-    } else {
-      processedHtml += pixelTag;
-    }
+    const pixelUrl = `${base}/open/${encodedId}?sig=${options.signer.signOpen(emailId)}`;
+    const pixelTag = `<img src="${pixelUrl}" width="1" height="1" border="0" alt="" style="height:1px!important;width:1px!important;border-width:0!important;margin:0!important;padding:0!important;" />`;
+    processedHtml = /<\/body>/i.test(processedHtml)
+      ? processedHtml.replace(/<\/body>/i, `${pixelTag}</body>`)
+      : processedHtml + pixelTag;
   }
 
-  return {
-    html: processedHtml,
-    text,
-    trackingPixelUrl,
-  };
+  return { html: processedHtml, text };
 }

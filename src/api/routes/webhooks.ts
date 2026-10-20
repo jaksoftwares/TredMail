@@ -1,27 +1,33 @@
-import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import crypto from "crypto";
 import { prisma } from "../../db/client.js";
-import { authenticateApiKey } from "../middleware/auth.js";
-import { dispatchWebhookEvent } from "../../webhooks/dispatcher.js";
+import { authenticateApiKey, requireScope } from "../middleware/auth.js";
+import {
+  WEBHOOK_EVENT_TYPES,
+  assertWebhookUrlAllowed,
+  deliverWebhook,
+  generateWebhookSecret,
+} from "../../webhooks/dispatcher.js";
+import { UnsafeUrlError } from "../../security/url-safety.js";
 
 const createWebhookSchema = z.object({
-  url: z.string().url(),
-  subscribed_to: z.array(z.string()).optional().default(["email.delivered", "email.bounced"]),
+  url: z.string().url().max(2048),
+  subscribed_to: z
+    .array(z.enum(["*", ...WEBHOOK_EVENT_TYPES]))
+    .min(1)
+    .optional()
+    .default(["email.delivered", "email.bounced"]),
 });
 
 export async function webhookRoutes(fastify: FastifyInstance) {
   fastify.addHook("preHandler", authenticateApiKey);
+  fastify.addHook("preHandler", requireScope("webhooks:manage"));
 
-  // -------------------------------------------------------------
-  // GET /v1/webhooks - List webhooks
-  // -------------------------------------------------------------
-  fastify.get("/", async (request: FastifyRequest, reply: FastifyReply) => {
+  // GET /v1/webhooks - List endpoints. Signing secrets are shown only once, at creation.
+  fastify.get("/", async (request, reply) => {
     const webhooks = await prisma.webhook.findMany({
       where: { organizationId: request.organization!.id },
-      include: {
-        _count: { select: { deliveries: true } },
-      },
+      include: { _count: { select: { deliveries: true } } },
       orderBy: { createdAt: "desc" },
     });
 
@@ -29,7 +35,6 @@ export async function webhookRoutes(fastify: FastifyInstance) {
       data: webhooks.map((w) => ({
         id: w.id,
         url: w.url,
-        secret: w.secret,
         subscribed_to: w.subscribedTo,
         is_active: w.isActive,
         total_deliveries: w._count.deliveries,
@@ -38,10 +43,8 @@ export async function webhookRoutes(fastify: FastifyInstance) {
     });
   });
 
-  // -------------------------------------------------------------
-  // POST /v1/webhooks - Create webhook
-  // -------------------------------------------------------------
-  fastify.post("/", async (request: FastifyRequest, reply: FastifyReply) => {
+  // POST /v1/webhooks - Create an endpoint
+  fastify.post("/", async (request, reply) => {
     const parseResult = createWebhookSchema.safeParse(request.body);
     if (!parseResult.success) {
       return reply.status(400).send({
@@ -53,13 +56,20 @@ export async function webhookRoutes(fastify: FastifyInstance) {
     }
 
     const { url, subscribed_to } = parseResult.data;
-    const secret = `whsec_${crypto.randomBytes(24).toString("hex")}`;
+    try {
+      await assertWebhookUrlAllowed(url);
+    } catch (err) {
+      if (err instanceof UnsafeUrlError) {
+        return reply.status(422).send({ statusCode: 422, error: "unsafe_url", message: err.message });
+      }
+      throw err;
+    }
 
     const webhook = await prisma.webhook.create({
       data: {
         organizationId: request.organization!.id,
         url,
-        secret,
+        secret: generateWebhookSecret(),
         subscribedTo: subscribed_to,
         isActive: true,
       },
@@ -68,66 +78,46 @@ export async function webhookRoutes(fastify: FastifyInstance) {
     return reply.status(201).send({
       id: webhook.id,
       url: webhook.url,
-      secret: webhook.secret,
+      secret: webhook.secret, // shown once; store it to verify signatures
       subscribed_to: webhook.subscribedTo,
       is_active: webhook.isActive,
       created_at: webhook.createdAt.toISOString(),
     });
   });
 
-  // -------------------------------------------------------------
-  // DELETE /v1/webhooks/:id - Delete webhook
-  // -------------------------------------------------------------
-  fastify.delete("/:id", async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-    const { id } = request.params;
-
+  // DELETE /v1/webhooks/:id
+  fastify.delete<{ Params: { id: string } }>("/:id", async (request, reply) => {
     const webhook = await prisma.webhook.findFirst({
-      where: { id, organizationId: request.organization!.id },
+      where: { id: request.params.id, organizationId: request.organization!.id },
     });
-
     if (!webhook) {
-      return reply.status(404).send({
-        statusCode: 404,
-        error: "not_found",
-        message: "Webhook endpoint not found.",
-      });
+      return reply.status(404).send({ statusCode: 404, error: "not_found", message: "Webhook endpoint not found." });
     }
 
-    await prisma.webhook.delete({ where: { id } });
-
+    await prisma.webhook.delete({ where: { id: webhook.id } });
     return reply.status(200).send({ success: true, message: "Webhook deleted." });
   });
 
-  // -------------------------------------------------------------
-  // POST /v1/webhooks/:id/test - Send a test ping
-  // -------------------------------------------------------------
-  fastify.post("/:id/test", async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-    const { id } = request.params;
-
+  // POST /v1/webhooks/:id/test - Send a test event to this endpoint only
+  fastify.post<{ Params: { id: string } }>("/:id/test", async (request, reply) => {
     const webhook = await prisma.webhook.findFirst({
-      where: { id, organizationId: request.organization!.id },
+      where: { id: request.params.id, organizationId: request.organization!.id },
     });
-
     if (!webhook) {
-      return reply.status(404).send({
-        statusCode: 404,
-        error: "not_found",
-        message: "Webhook endpoint not found.",
-      });
+      return reply.status(404).send({ statusCode: 404, error: "not_found", message: "Webhook endpoint not found." });
     }
 
-    await dispatchWebhookEvent(request.organization!.id, "email.delivered", {
-      email_id: "test_msg_" + Date.now(),
+    const result = await deliverWebhook(webhook, "email.delivered", {
+      email_id: `test_${Date.now()}`,
       to: ["test@example.com"],
-      from: "system@dovepeak.com",
-      subject: "Test Webhook Ping",
-      smtp_response: "250 2.0.0 Ok: test ping successful",
+      subject: "TredMail test event",
       is_test: true,
     });
 
     return reply.status(200).send({
-      success: true,
-      message: "Test ping dispatched to " + webhook.url,
+      success: result.success,
+      status_code: result.statusCode,
+      message: result.success ? `Test event delivered to ${webhook.url}` : `Delivery to ${webhook.url} failed.`,
     });
   });
 }
