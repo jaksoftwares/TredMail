@@ -6,6 +6,16 @@ import { acceptEmail, sendEmailSchema } from "@tredmail/core/services/email-serv
 
 const batchSchema = z.array(sendEmailSchema).min(1).max(100);
 
+const listQuerySchema = z.object({
+  status: z
+    .enum(["queued", "sending", "sent", "delivered", "failed", "bounced", "complained"])
+    .transform((s) => s.toUpperCase() as "QUEUED" | "SENDING" | "SENT" | "DELIVERED" | "FAILED" | "BOUNCED" | "COMPLAINED")
+    .optional(),
+  q: z.string().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  cursor: z.string().max(64).optional(),
+});
+
 /**
  * POST /v1/emails/batch and its alias POST /v1/batch share this handler.
  * Each message is validated and accepted independently; one failure does not stop the rest.
@@ -67,6 +77,60 @@ export async function emailRoutes(fastify: FastifyInstance) {
   // POST /v1/emails/batch - Send up to 100 emails
   fastify.post("/batch", { preHandler: requireScope("emails:send") }, sendBatch);
 
+  // GET /v1/emails?status=&q=&limit=&cursor= - Newest first, cursor-paginated
+  fastify.get<{ Querystring: { status?: string; q?: string; limit?: string; cursor?: string } }>(
+    "/",
+    { preHandler: requireScope("emails:read") },
+    async (request, reply) => {
+      const parsed = listQuerySchema.safeParse(request.query);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          statusCode: 400,
+          error: "validation_error",
+          message: "Invalid list parameters.",
+          details: parsed.error.errors,
+        });
+      }
+      const { status, q, limit, cursor } = parsed.data;
+      const search = q?.trim().toLowerCase();
+
+      const emails = await prisma.email.findMany({
+        where: {
+          organizationId: request.organization!.id,
+          ...(status ? { status } : {}),
+          ...(search
+            ? {
+                OR: [
+                  { subject: { contains: search, mode: "insensitive" as const } },
+                  { from: { contains: search, mode: "insensitive" as const } },
+                  { to: { has: search } },
+                ],
+              }
+            : {}),
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: limit + 1,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+        select: { id: true, from: true, to: true, subject: true, status: true, createdAt: true, deliveredAt: true },
+      });
+
+      const hasMore = emails.length > limit;
+      const page = hasMore ? emails.slice(0, limit) : emails;
+      return reply.status(200).send({
+        data: page.map((e) => ({
+          id: e.id,
+          from: e.from,
+          to: e.to,
+          subject: e.subject,
+          status: e.status.toLowerCase(),
+          created_at: e.createdAt.toISOString(),
+          delivered_at: e.deliveredAt?.toISOString() ?? null,
+        })),
+        next_cursor: hasMore ? page[page.length - 1].id : null,
+      });
+    }
+  );
+
   // GET /v1/emails/:id - Email status and event timeline
   fastify.get<{ Params: { id: string } }>(
     "/:id",
@@ -93,7 +157,13 @@ export async function emailRoutes(fastify: FastifyInstance) {
         domain: email.domain.name,
         from: email.from,
         to: email.to,
+        cc: email.cc,
+        bcc: email.bcc,
+        reply_to: email.replyTo,
         subject: email.subject,
+        html: email.htmlBody,
+        text: email.textBody,
+        tags: email.tags,
         status: email.status.toLowerCase(),
         created_at: email.createdAt.toISOString(),
         delivered_at: email.deliveredAt?.toISOString() || null,

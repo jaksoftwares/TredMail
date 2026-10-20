@@ -11,7 +11,7 @@
   "scripts": {
     "dev:api": "npm run dev -w @tredmail/api",
     "dev:worker": "npm run dev -w @tredmail/worker",
-    "dev:console": "npm run dev --prefix console",
+    "dev:console": "npm run dev --prefix apps/console",
     "dev": "concurrently -n api,worker \"npm run dev:api\" \"npm run dev:worker\"",
     "dev:all": "concurrently -n api,worker,console \"npm run dev:api\" \"npm run dev:worker\" \"npm run dev:console\"",
     "build": "npm run build -w @tredmail/api -w @tredmail/worker",
@@ -26,7 +26,8 @@
     "db:studio": "prisma studio --schema=packages/db/prisma/schema.prisma",
     "db:seed": "npm run seed -w @tredmail/api",
     "keys:revoke": "npm run keys:revoke -w @tredmail/api --",
-    "test:accounts": "tsx scripts/accounts-test.ts"
+    "test:accounts": "tsx scripts/accounts-test.ts",
+    "build:console": "npm run build --prefix apps/console"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

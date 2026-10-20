@@ -156,44 +156,61 @@ The complete technical blueprint is structured into the following deep-dive guid
 
 **Prerequisites:** Node.js 22+, Docker Desktop.
 
-1. **Configure.** Copy `.env.example` to `.env`, then set `TREDMAIL_MASTER_ENCRYPTION_KEY` and `INTERNAL_API_TOKEN` to the output of `openssl rand -hex 32`. Set `WEBHOOK_ALLOW_PRIVATE_TARGETS=true` if you want to test webhooks against `localhost`.
-2. **Start backing services** (PostgreSQL on 5435, Redis on 6389, Mailpit on 1035/8035):
+### Repository layout
+
+| Path | What it is |
+| --- | --- |
+| `apps/api` | Fastify API: sending, domains, keys, webhooks, accounts (Better Auth at `/api/auth`) |
+| `apps/worker` | Delivery worker: DKIM signing, tracking links, SMTP hand-off |
+| `apps/console` | Next.js console on the Dovepeak brand (separate npm project) |
+| `packages/core` | Shared config, security, DNS, queue, send service, email templates |
+| `packages/db` | Prisma schema, migrations and client |
+| `packages/sdk-node` | Node.js SDK (unpublished) |
+
+### First run
+
+1. **Configure.** Copy `.env.example` to `.env`. Set `TREDMAIL_MASTER_ENCRYPTION_KEY`, `INTERNAL_API_TOKEN` and `BETTER_AUTH_SECRET`, each to the output of `openssl rand -hex 32`. Set `WEBHOOK_ALLOW_PRIVATE_TARGETS=true` to test webhooks against `localhost`.
+2. **Start backing services** (PostgreSQL 5435, Redis 6389, Mailpit 1035/8035):
    ```bash
    docker compose up -d
    ```
 3. **Install, migrate and seed:**
    ```bash
-   npm install && npm install --prefix console
+   npm install && npm install --prefix apps/console
    npm run db:deploy
-   npm run db:seed        # prints a full-access API key ONCE; store it in a password manager
+   npm run db:seed   # prints an owner login and an API key ONCE; store them in a password manager
    ```
-   In development the seed marks `dovepeak.com` as verified so mail can flow to Mailpit. Anywhere else the domain must pass real DNS verification.
+   The seed creates the platform workspace (owner of `tredmail.dovepeak.com`, used for account emails and the sandbox sender) and the Dovepeak workspace. In development both domains are marked verified so mail flows to Mailpit; anywhere else they must pass real DNS verification.
 4. **Run everything:**
    ```bash
-   npm run dev:all        # API :3000, worker, console :3001
+   npm run dev:all   # API :3000, worker, console :3010
    ```
 
 | Service | URL |
 | --- | --- |
-| Console | http://localhost:3001 (paste your API key; it is kept only for the browser tab) |
-| Mailpit inbox | http://localhost:8035 |
+| Console | http://localhost:3010 (sign in with the seeded owner, or create an account) |
+| Mailpit inbox (verification and test emails land here) | http://localhost:8035 |
 | API liveness / readiness | http://localhost:3000/health and /health/ready |
+
+### How a new user gets started
+
+Sign up, confirm the email (it arrives in Mailpit locally), create a workspace, then press **Send test email** on the Overview page. The sandbox sender (`onboarding@tredmail.dovepeak.com`) can email workspace members' verified addresses, 50 per day, before any DNS work. Adding and verifying a domain lifts that restriction.
 
 ### Checks
 
 ```bash
-npm run typecheck && npm run lint && npm test     # what CI runs
-TREDMAIL_API_KEY=tred_live_... npm run test:smoke # full send -> worker -> Mailpit -> tracking round trip
+npm run typecheck && npm run lint && npm test         # what CI runs for the API and worker
+npm run build:console                                 # console build and type check
+TREDMAIL_API_KEY=tred_live_... npm run test:smoke     # send -> worker -> Mailpit -> tracking
+npm run test:accounts                                 # sign-up, workspace, sandbox, invitations, roles
 ```
 
 ### Security rules
 
 - Never commit API keys, webhook secrets or `.env`. CI runs gitleaks on every pull request.
-- API keys carry scopes (`emails:send`, `domains:manage`, `api_keys:manage`, `full_access`, ...). Give services the narrowest key that works.
+- API keys and member roles share one permission model (`emails:send`, `domains:manage`, `api_keys:manage`, `full_access`, ...). Give services the narrowest key that works.
 - If a key leaks: `npm run keys:revoke -- <key>` (or `node apps/api/dist/cli/revoke-api-key.js <key>` in the production image), then issue a new one.
 
 ### Production
 
-`deploy-hostinger.sh` provisions Docker, generates every secret, applies migrations and seeds the organization. Before relying on it, read the open items in the readiness report: the production stack does not yet include an MTA or bounce handling (roadmap Phase 2).
-
-See the **[Implementation Roadmap](docs/ROADMAP_AND_IMPLEMENTATION.md)** for the original build plan.
+`deploy-hostinger.sh` provisions Docker, generates every secret, applies migrations and seeds the organization. The production stack does not yet include an MTA or bounce handling (roadmap Phase 2).

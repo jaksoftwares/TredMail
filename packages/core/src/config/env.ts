@@ -18,7 +18,7 @@ const envSchema = z
     // Public URLs. API_BASE_URL is what customers call; TRACKING_BASE_URL is embedded in emails.
     API_BASE_URL: z.string().url().default("http://localhost:3000/v1"),
     TRACKING_BASE_URL: z.string().url().optional(),
-    CONSOLE_URL: z.string().url().default("http://localhost:3001"),
+    CONSOLE_URL: z.string().url().default("http://localhost:3010"),
     // Comma-separated list of browser origins allowed to call the API. Defaults to CONSOLE_URL.
     CORS_ORIGINS: z.string().optional(),
 

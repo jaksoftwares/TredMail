@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+/*
+ * Dovepeak brand tokens (BRAND GUIDELINES, Dovepeak Digital Solutions):
+ *   Deep Navy #000027 - structure, sidebar, headings
+ *   Vibrant Orange #FF6300 - interactive elements and callouts (navy text on orange; never
+ *     orange text on white, which is 2.98:1)
+ *   Forest Green #2F821A - success and healthy states
+ *   Off-white #F8F8FF - canvas
+ *   Open Sans - headings, UI and body
+ */
+@theme {
+  --color-navy: #000027;
+  --color-navy-900: #05053a;
+  --color-navy-800: #0d0d4a;
+  --color-navy-700: #1b1b5e;
+  --color-navy-200: #c9c9e0;
+  --color-orange: #ff6300;
+  --color-orange-600: #e55900;
+  --color-orange-50: #fff1e8;
+  --color-green: #2f821a;
+  --color-green-50: #ecf6e9;
+  --color-offwhite: #f8f8ff;
+  --color-ink: #000027;
+  --color-muted: #4a4a63;
+  --color-subtle: #6b6b85;
+  --color-line: #e4e4ef;
+  --color-surface: #ffffff;
+  --color-danger: #b42318;
+  --color-danger-50: #fdecea;
+  --color-warning: #8a4b00;
+  --color-warning-50: #fff6e0;
+  --color-info: #1b1b5e;
+  --color-info-50: #ececf8;
+
+  --font-sans: var(--font-open-sans), "Open Sans", Arial, Helvetica, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+html,
+body {
+  background: var(--color-offwhite);
+  color: var(--color-ink);
+}
+
+body {
+  font-family: var(--font-sans);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-orange);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--color-orange-50);
+}
