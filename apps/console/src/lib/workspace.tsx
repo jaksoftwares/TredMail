@@ -25,7 +25,14 @@ export interface Me {
 interface WorkspaceContextValue {
   me: Me;
   workspace: Workspace;
-  can: { manageMembers: boolean; manageKeys: boolean; manageDomains: boolean; send: boolean };
+  can: {
+    manageMembers: boolean;
+    manageKeys: boolean;
+    manageDomains: boolean;
+    manageWebhooks: boolean;
+    manageTemplates: boolean;
+    send: boolean;
+  };
   switchWorkspace: (id: string) => void;
   refreshMe: () => Promise<unknown>;
 }
@@ -91,7 +98,14 @@ export function WorkspaceProvider({ children, fallback }: { children: ReactNode;
   const value: WorkspaceContextValue = {
     me,
     workspace,
-    can: { manageMembers: admin, manageKeys: admin, manageDomains: admin, send: role !== "VIEWER" },
+    can: {
+      manageMembers: admin,
+      manageKeys: admin,
+      manageDomains: admin,
+      manageWebhooks: admin,
+      manageTemplates: role !== "VIEWER",
+      send: role !== "VIEWER",
+    },
     switchWorkspace,
     refreshMe: mutate,
   };

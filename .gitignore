@@ -35,3 +35,7 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Python SDK
+__pycache__/
+*.egg-info/

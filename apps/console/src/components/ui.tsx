@@ -102,6 +102,9 @@ export function Badge({ tone = "neutral", children }: { tone?: Tone; children: R
 }
 
 const statusTones: Record<string, Tone> = {
+  scheduled: "info",
+  canceled: "neutral",
+  succeeded: "success",
   queued: "info",
   sending: "info",
   sent: "success",

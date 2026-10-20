@@ -2,13 +2,17 @@ import { z } from "zod";
 
 const emailOrList = z.union([z.string().email(), z.array(z.string().email())]);
 
+export const MAX_SCHEDULE_DAYS = 30;
+
 export const sendEmailSchema = z.object({
-  from: z.string().min(3).max(320),
+  // Optional only when the template sets a default sender
+  from: z.string().min(3).max(320).optional(),
   to: z.union([z.string().email(), z.array(z.string().email()).min(1).max(50)]),
   cc: emailOrList.optional(),
   bcc: emailOrList.optional(),
   reply_to: z.string().email().optional(),
-  subject: z.string().min(1).max(998),
+  // Optional only when a template supplies it
+  subject: z.string().min(1).max(998).optional(),
   html: z.string().optional(),
   text: z.string().optional(),
   headers: z.record(z.string()).optional(),
@@ -19,12 +23,19 @@ export const sendEmailSchema = z.object({
         filename: z.string().min(1).max(255),
         content: z.string(), // base64
         content_type: z.string().optional(),
+        // Set to embed the file inline: reference it in the HTML as <img src="cid:...">
+        content_id: z.string().max(255).optional(),
       })
     )
     .max(20)
     .optional(),
   track_opens: z.boolean().optional(),
   track_clicks: z.boolean().optional(),
+  // Template id or alias; its subject, html and text are rendered with `variables`
+  template: z.string().min(1).max(128).optional(),
+  variables: z.record(z.unknown()).optional(),
+  // ISO 8601 time, up to 30 days ahead
+  scheduled_at: z.string().datetime({ offset: true }).optional(),
 });
 
 export type SendEmailInput = z.infer<typeof sendEmailSchema>;

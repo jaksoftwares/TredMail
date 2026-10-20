@@ -1,7 +1,8 @@
 import { prisma, type Domain } from "@tredmail/db";
-import { enqueueEmail } from "../queue/email.queue.js";
+import { enqueueEmail, removeQueuedEmail } from "../queue/email.queue.js";
+import { renderTemplate } from "../mail/template-engine.js";
 import { env, PLATFORM_ORG_SLUG } from "../config/env.js";
-import { findReservedHeaders, parseFromAddress, type SendEmailInput } from "./email-validation.js";
+import { findReservedHeaders, MAX_SCHEDULE_DAYS, parseFromAddress, type SendEmailInput } from "./email-validation.js";
 
 export { sendEmailSchema } from "./email-validation.js";
 
@@ -106,32 +107,89 @@ async function resolveSendingDomain(
 }
 
 export type AcceptResult =
-  | { ok: true; email: { id: string; from: string; to: string[]; createdAt: Date } }
+  | {
+      ok: true;
+      email: { id: string; from: string; to: string[]; status: "queued" | "scheduled"; scheduledAt: Date | null; createdAt: Date };
+    }
   | Failure;
 
+const fail = (statusCode: number, error: string, message: string): Failure => ({ ok: false, statusCode, error, message });
+
+/** Finds a workspace template by id or alias. */
+export async function findTemplate(organizationId: string, idOrAlias: string) {
+  return prisma.template.findFirst({
+    where: { organizationId, OR: [{ id: idOrAlias }, { alias: idOrAlias.toLowerCase() }] },
+  });
+}
+
+interface ResolvedContent {
+  ok: true;
+  from?: string;
+  replyTo?: string;
+  subject?: string;
+  html?: string;
+  text?: string;
+  templateId: string | null;
+}
+
+/** Applies a template to the request. Fields given in the request win over the template's. */
+async function resolveContent(organizationId: string, payload: SendEmailInput): Promise<ResolvedContent | Failure> {
+  if (!payload.template) {
+    return { ok: true, from: payload.from, replyTo: payload.reply_to, subject: payload.subject, html: payload.html, text: payload.text, templateId: null };
+  }
+  const template = await findTemplate(organizationId, payload.template);
+  if (!template) return fail(404, "template_not_found", `Template '${payload.template}' does not exist in this workspace.`);
+  const rendered = renderTemplate(
+    { subject: payload.subject ?? template.subject, html: payload.html ?? template.html, text: payload.text ?? template.text },
+    payload.variables ?? {},
+  );
+  if (rendered.missing.length > 0) {
+    return fail(422, "missing_template_variables", `Provide these template variables (or give them a fallback): ${rendered.missing.join(", ")}.`);
+  }
+  return {
+    ok: true,
+    from: payload.from ?? template.from ?? undefined,
+    replyTo: payload.reply_to ?? template.replyTo ?? undefined,
+    subject: rendered.subject,
+    html: rendered.html ?? undefined,
+    text: rendered.text ?? undefined,
+    templateId: template.id,
+  };
+}
+
+function parseSchedule(value: string | undefined): { ok: true; at: Date | null } | Failure {
+  if (!value) return { ok: true, at: null };
+  const at = new Date(value);
+  const now = Date.now();
+  if (at.getTime() <= now + 5_000) return { ok: true, at: null }; // now or in the past: send immediately
+  if (at.getTime() > now + MAX_SCHEDULE_DAYS * 86_400_000) {
+    return fail(422, "schedule_too_far", `scheduled_at can be at most ${MAX_SCHEDULE_DAYS} days ahead.`);
+  }
+  return { ok: true, at };
+}
+
 /**
- * Validates sender domain and suppressions, records the email and enqueues it for delivery.
- * Shared by the single-send and batch endpoints so both apply the same rules.
+ * Validates sender domain and suppressions, records the email (with its attachments) and
+ * queues it for delivery, now or at scheduled_at. Shared by the API, batch sends and the
+ * SMTP relay so every path applies the same rules.
  */
 export async function acceptEmail(organizationId: string, payload: SendEmailInput): Promise<AcceptResult> {
-  if (!payload.html && !payload.text) {
-    return { ok: false, statusCode: 422, error: "missing_body", message: "Provide 'html', 'text' or both." };
-  }
+  const content = await resolveContent(organizationId, payload);
+  if (!content.ok) return content;
+  if (!content.from) return fail(422, "missing_from", "Provide 'from' (or set a default sender on the template).");
+  if (!content.subject) return fail(422, "missing_subject", "Provide 'subject' (or use a template that has one).");
+  if (!content.html && !content.text) return fail(422, "missing_body", "Provide 'html', 'text' or both.");
 
   const reserved = findReservedHeaders(payload.headers);
   if (reserved.length > 0) {
-    return {
-      ok: false,
-      statusCode: 422,
-      error: "reserved_header",
-      message: `These headers are set by TredMail and cannot be overridden: ${reserved.join(", ")}.`,
-    };
+    return fail(422, "reserved_header", `These headers are set by TredMail and cannot be overridden: ${reserved.join(", ")}.`);
   }
 
-  const sender = parseFromAddress(payload.from);
-  if (!sender) {
-    return { ok: false, statusCode: 422, error: "invalid_from", message: `Invalid 'from' address: '${payload.from}'.` };
-  }
+  const sender = parseFromAddress(content.from);
+  if (!sender) return fail(422, "invalid_from", `Invalid 'from' address: '${content.from}'.`);
+
+  const schedule = parseSchedule(payload.scheduled_at);
+  if (!schedule.ok) return schedule;
 
   const to = toList(payload.to);
   const cc = toList(payload.cc);
@@ -146,67 +204,115 @@ export async function acceptEmail(organizationId: string, payload: SendEmailInpu
     where: { organizationId, email: { in: allRecipients } },
   });
   if (suppressed) {
-    return {
-      ok: false,
-      statusCode: 422,
-      error: "recipient_suppressed",
-      message: `Recipient '${suppressed.email}' is suppressed (${suppressed.reason}). Delivery was blocked to protect your sender reputation.`,
-    };
+    return fail(
+      422,
+      "recipient_suppressed",
+      `Recipient '${suppressed.email}' is suppressed (${suppressed.reason}). Delivery was blocked to protect your sender reputation.`,
+    );
   }
 
+  const attachments = (payload.attachments ?? []).map((a) => {
+    const bytes = Buffer.from(a.content, "base64");
+    return { filename: a.filename, contentType: a.content_type, contentId: a.content_id, content: bytes, size: bytes.length };
+  });
+
+  const scheduledAt = schedule.at;
   const email = await prisma.$transaction(async (tx) => {
     const created = await tx.email.create({
       data: {
         organizationId,
         domainId: domain.id,
-        from: payload.from,
+        from: content.from!,
         to,
         cc,
         bcc,
-        replyTo: payload.reply_to,
-        subject: payload.subject,
-        htmlBody: payload.html,
-        textBody: payload.text,
-        status: "QUEUED",
+        replyTo: content.replyTo,
+        subject: content.subject!,
+        htmlBody: content.html,
+        textBody: content.text,
+        status: scheduledAt ? "SCHEDULED" : "QUEUED",
+        scheduledAt,
+        templateId: content.templateId,
+        trackOpens: payload.track_opens ?? true,
+        trackClicks: payload.track_clicks ?? true,
         metadata: payload.headers ? { headers: payload.headers } : undefined,
         tags: payload.tags,
+        attachments: attachments.length ? { create: attachments } : undefined,
       },
     });
-    await tx.emailEvent.create({ data: { emailId: created.id, type: "QUEUED" } });
+    await tx.emailEvent.create({
+      data: {
+        emailId: created.id,
+        type: scheduledAt ? "SCHEDULED" : "QUEUED",
+        details: scheduledAt ? { scheduledAt: scheduledAt.toISOString() } : undefined,
+      },
+    });
     return created;
   });
 
+  // The database row is the source of truth. If Redis is briefly unavailable, the worker's
+  // outbox sweeper queues the email within a minute, so the request still succeeds.
   try {
-    await enqueueEmail({
-      emailId: email.id,
-      organizationId,
-      domainId: domain.id,
-      from: payload.from,
-      to,
-      cc,
-      bcc,
-      replyTo: payload.reply_to,
-      subject: payload.subject,
-      html: payload.html,
-      text: payload.text,
-      headers: payload.headers,
-      attachments: payload.attachments?.map((a) => ({
-        filename: a.filename,
-        content: a.content,
-        contentType: a.content_type,
-      })),
-      trackOpens: payload.track_opens ?? true,
-      trackClicks: payload.track_clicks ?? true,
-      category: payload.tags?.find((tag) => tag.name === "category")?.value,
-    });
+    await enqueueEmail({ emailId: email.id, organizationId, domainId: domain.id }, scheduledAt);
   } catch (err) {
-    // Until the transactional outbox lands (Phase 3), never leave a row stuck in QUEUED.
-    await prisma.email.update({ where: { id: email.id }, data: { status: "FAILED", smtpResponse: "enqueue_failed" } });
-    await prisma.emailEvent.create({
-      data: { emailId: email.id, type: "FAILED", details: { reason: "enqueue_failed" } },
-    });
-    throw err;
+    console.error(`[email] could not queue ${email.id} now; the outbox sweeper will retry`, err);
   }
 
-  return { ok: true, email: { id: email.id, from: email.from, to: email.to, createdAt: email.createdAt } };
+  return {
+    ok: true,
+    email: {
+      id: email.id,
+      from: email.from,
+      to: email.to,
+      status: scheduledAt ? "scheduled" : "queued",
+      scheduledAt: email.scheduledAt,
+      createdAt: email.createdAt,
+    },
+  };
+}
+
+/** Cancels a scheduled email. Once an email is being sent it can no longer be canceled. */
+export async function cancelScheduledEmail(organizationId: string, emailId: string): Promise<{ ok: true } | Failure> {
+  const updated = await prisma.email.updateMany({
+    where: { id: emailId, organizationId, status: "SCHEDULED" },
+    data: { status: "CANCELED" },
+  });
+  if (updated.count === 0) {
+    const email = await prisma.email.findFirst({ where: { id: emailId, organizationId }, select: { status: true } });
+    if (!email) return fail(404, "not_found", `Email '${emailId}' not found.`);
+    return fail(409, "not_cancelable", `Only scheduled emails can be canceled; this one is ${email.status.toLowerCase()}.`);
+  }
+  await prisma.emailEvent.create({ data: { emailId, type: "CANCELED" } });
+  // The worker also skips canceled rows, so a failure here is harmless.
+  await removeQueuedEmail(emailId).catch(() => undefined);
+  return { ok: true };
+}
+
+/** Moves a scheduled email to a new time, or sends it now when the time is not in the future. */
+export async function rescheduleEmail(
+  organizationId: string,
+  emailId: string,
+  scheduledAtInput: string,
+): Promise<{ ok: true; scheduledAt: Date | null } | Failure> {
+  const schedule = parseSchedule(scheduledAtInput);
+  if (!schedule.ok) return schedule;
+  const email = await prisma.email.findFirst({ where: { id: emailId, organizationId } });
+  if (!email) return fail(404, "not_found", `Email '${emailId}' not found.`);
+  if (email.status !== "SCHEDULED") {
+    return fail(409, "not_reschedulable", `Only scheduled emails can be rescheduled; this one is ${email.status.toLowerCase()}.`);
+  }
+  const at = schedule.at;
+  await prisma.email.update({ where: { id: emailId }, data: { scheduledAt: at, status: at ? "SCHEDULED" : "QUEUED" } });
+  await prisma.emailEvent.create({
+    data: {
+      emailId,
+      type: at ? "SCHEDULED" : "QUEUED",
+      details: at ? { scheduledAt: at.toISOString(), rescheduled: true } : { rescheduled: true },
+    },
+  });
+  await removeQueuedEmail(emailId).catch(() => undefined);
+  await enqueueEmail({ emailId, organizationId, domainId: email.domainId }, at).catch((err) =>
+    console.error(`[email] could not requeue ${emailId}; the outbox sweeper will retry`, err),
+  );
+  return { ok: true, scheduledAt: at };
 }

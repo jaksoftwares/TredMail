@@ -47,6 +47,9 @@ model Organization {
   emails       Email[]
   suppressions Suppression[]
   webhooks     Webhook[]
+  templates    Template[]
+  idempotency  IdempotencyKey[]
+  dmarcReports DmarcReport[]
 
   @@map("organizations")
 }
@@ -241,8 +244,9 @@ model Domain {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   emails       Email[]
+  dmarcReports DmarcReport[]
 
   @@unique([organizationId, name])
   @@map("domains")
@@ -253,6 +257,8 @@ model Domain {
 // -------------------------------------------------------------
 
 enum EmailStatus {
+  SCHEDULED // Waiting for scheduledAt
+  CANCELED // Scheduled email canceled before it was sent
   QUEUED
   SENDING
   SENT // Accepted by the outbound relay/MTA; final delivery not yet confirmed
@@ -285,21 +291,108 @@ model Email {
   smtpResponse   String?     @db.Text
   metadata       Json? // Custom developer metadata
   tags           Json? // Categorization tags
+  trackOpens     Boolean     @default(true)
+  trackClicks    Boolean     @default(true)
+  scheduledAt    DateTime? // Send no earlier than this
+  templateId     String? // Template the email was rendered from, if any
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   deliveredAt DateTime?
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  domain       Domain       @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  domain       Domain            @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  template     Template?         @relation(fields: [templateId], references: [id], onDelete: SetNull)
   events       EmailEvent[]
+  attachments  EmailAttachment[]
 
   @@index([organizationId, status])
   @@index([organizationId, createdAt])
+  @@index([status, scheduledAt])
   @@map("emails")
 }
 
+/// Stored with the email so the worker sends from the database, never from queue payloads.
+model EmailAttachment {
+  id          String  @id @default(cuid())
+  emailId     String
+  filename    String
+  contentType String?
+  contentId   String? // For inline images referenced as cid: in the HTML
+  content     Bytes
+  size        Int
+
+  email Email @relation(fields: [emailId], references: [id], onDelete: Cascade)
+
+  @@index([emailId])
+  @@map("email_attachments")
+}
+
+/// Reusable email content with {{variables}}.
+model Template {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  alias          String // Stable identifier used by API callers, unique per workspace
+  subject        String
+  html           String?  @db.Text
+  text           String?  @db.Text
+  from           String? // Default sender when the send request omits one
+  replyTo        String?
+  variables      Json? // Declared variables: [{ name, fallback? }]
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  emails       Email[]
+
+  @@unique([organizationId, alias])
+  @@map("templates")
+}
+
+/// Remembers the response to a POST sent with an Idempotency-Key, for 24 hours.
+model IdempotencyKey {
+  id             String   @id @default(cuid())
+  organizationId String
+  key            String
+  requestHash    String
+  statusCode     Int? // Null while the first request is still being processed
+  response       Json?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, key])
+  @@index([createdAt])
+  @@map("idempotency_keys")
+}
+
+/// One DMARC aggregate report received for a domain.
+model DmarcReport {
+  id             String   @id @default(cuid())
+  organizationId String
+  domainId       String
+  reporter       String // org_name of the receiving provider, e.g. "google.com"
+  reportId       String
+  dateBegin      DateTime
+  dateEnd        DateTime
+  policy         String? // Published p= value
+  messageCount   Int
+  dmarcPass      Int // Messages that passed DKIM or SPF with alignment
+  records        Json // Per source IP: [{ ip, count, disposition, dkim, spf }]
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  domain       Domain       @relation(fields: [domainId], references: [id], onDelete: Cascade)
+
+  @@unique([domainId, reporter, reportId])
+  @@index([domainId, dateBegin])
+  @@map("dmarc_reports")
+}
+
 enum EmailEventType {
+  SCHEDULED
+  CANCELED
   QUEUED
   SENT
   DEFERRED // Temporary failure; will be retried
@@ -376,18 +469,24 @@ model Webhook {
 }
 
 model WebhookDelivery {
-  id         String   @id @default(cuid())
-  webhookId  String
-  event      String
-  payload    Json
-  statusCode Int?
-  response   String?  @db.Text
-  attempts   Int      @default(1)
-  success    Boolean  @default(false)
-  createdAt  DateTime @default(now())
+  id            String    @id @default(cuid())
+  webhookId     String
+  event         String
+  // Standard Webhooks message id (webhook-id header); the same on every retry and replay
+  messageId     String?
+  payload       Json
+  status        String    @default("pending") // pending | succeeded | failed
+  statusCode    Int?
+  response      String?   @db.Text
+  attempts      Int       @default(0)
+  success       Boolean   @default(false)
+  lastAttemptAt DateTime?
+  nextAttemptAt DateTime?
+  createdAt     DateTime  @default(now())
 
   webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
 
   @@index([webhookId, success])
+  @@index([webhookId, createdAt])
   @@map("webhook_deliveries")
 }

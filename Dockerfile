@@ -1,4 +1,4 @@
-# TredMail API and worker image (one image, two commands).
+# TredMail backend image: API, worker and SMTP relay (one image, three commands).
 
 # ---------------------------------------------------------------
 # Build: install the workspace, generate Prisma, bundle the apps
@@ -11,6 +11,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
 COPY apps/worker/package.json apps/worker/
+COPY apps/smtp-relay/package.json apps/smtp-relay/
 COPY packages/core/package.json packages/core/
 COPY packages/db/package.json packages/db/
 COPY packages/sdk-node/package.json packages/sdk-node/
@@ -20,6 +21,7 @@ COPY tsconfig.base.json ./
 COPY packages ./packages
 COPY apps/api ./apps/api
 COPY apps/worker ./apps/worker
+COPY apps/smtp-relay ./apps/smtp-relay
 RUN npm run db:generate && npm run build
 
 # ---------------------------------------------------------------
@@ -34,6 +36,7 @@ ENV PORT=3000
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
 COPY apps/worker/package.json apps/worker/
+COPY apps/smtp-relay/package.json apps/smtp-relay/
 COPY packages/core/package.json packages/core/
 COPY packages/db/package.json packages/db/
 COPY packages/sdk-node/package.json packages/sdk-node/
@@ -47,6 +50,7 @@ RUN npx prisma generate --schema=packages/db/prisma/schema.prisma  && npx prisma
 
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
 COPY --from=builder /app/apps/worker/dist ./apps/worker/dist
+COPY --from=builder /app/apps/smtp-relay/dist ./apps/smtp-relay/dist
 
 USER node
 EXPOSE 3000

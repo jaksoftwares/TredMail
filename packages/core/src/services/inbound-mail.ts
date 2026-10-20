@@ -1,7 +1,9 @@
 import type { Redis } from "ioredis";
 import { env } from "../config/env.js";
 import { createVerpCodec } from "../mail/verp.js";
-import { parseInboundReport } from "../mail/report-parser.js";
+import { findAttachments, parseInboundReport, parseMime } from "../mail/report-parser.js";
+import { decompressReport, parseDmarcAggregateXml } from "../mail/dmarc-report.js";
+import { prisma, type Prisma } from "@tredmail/db";
 import { recordBounce, recordComplaint, recordDeferred } from "./delivery-events.js";
 import { acceptEmail, getPlatformOrganizationId } from "./email-service.js";
 
@@ -17,6 +19,7 @@ export type InboundOutcome =
   | "bounce_recorded"
   | "delay_recorded"
   | "complaint_recorded"
+  | "dmarc_recorded"
   | "report_unmatched"
   | "forwarded"
   | "forward_skipped"
@@ -28,8 +31,8 @@ const domainOf = (address: string) => address.trim().replace(/^<|>$/g, "").split
  * Handles one message KumoMTA received for a TredMail domain:
  *  - bounce reports (DSNs) and plain-text bounces sent to a VERP address update the email;
  *  - spam complaints (ARF) suppress the recipient, wherever they arrive;
- *  - anything else addressed to the platform domain (postmaster@, abuse@, dmarc@, replies)
- *    is forwarded to OPS_EMAIL as an attachment; everything else is dropped.
+ *  - anything else addressed to the platform domain or the mail server's own name
+ *    (postmaster@, abuse@, dmarc@, replies) is forwarded to OPS_EMAIL as an attachment; everything else is dropped.
  */
 export async function handleInboundMessage(message: InboundMessage, redis: Redis): Promise<InboundOutcome> {
   const report = parseInboundReport(message.raw);
@@ -72,8 +75,50 @@ export async function handleInboundMessage(message: InboundMessage, redis: Redis
 
   // Ordinary mail. VERP addresses only ever receive reports and auto-replies: drop them.
   if (verpEmailId || report.autoReply) return "dropped";
-  if (domainOf(message.envelopeTo) !== env.PRIMARY_DOMAIN.toLowerCase()) return "dropped";
+  const forwardable = [env.PRIMARY_DOMAIN.toLowerCase(), env.MTA_HOSTNAME.toLowerCase()];
+  if (!forwardable.includes(domainOf(message.envelopeTo))) return "dropped";
+  if (localPartOf(message.envelopeTo) === "dmarc" && (await recordDmarcReports(message.raw)) > 0) return "dmarc_recorded";
   return forwardToOps(message, report.subject, redis);
+}
+
+const localPartOf = (address: string) => address.trim().replace(/^<|>$/g, "").split("@")[0]?.toLowerCase() ?? "";
+
+/**
+ * Stores the DMARC aggregate reports attached to a message, for every verified domain with
+ * that name (TredMail's own domain and customers whose rua= points at dmarc@). Returns how
+ * many were stored; 0 means the message was not a readable report and is forwarded instead.
+ */
+export async function recordDmarcReports(raw: string): Promise<number> {
+  let stored = 0;
+  for (const file of findAttachments(parseMime(raw))) {
+    let report;
+    try {
+      report = parseDmarcAggregateXml(decompressReport(file.content));
+    } catch {
+      continue;
+    }
+    const domains = await prisma.domain.findMany({ where: { name: report.domain, status: "VERIFIED" }, select: { id: true, organizationId: true } });
+    for (const domain of domains) {
+      await prisma.dmarcReport.upsert({
+        where: { domainId_reporter_reportId: { domainId: domain.id, reporter: report.reporter, reportId: report.reportId } },
+        update: {},
+        create: {
+          organizationId: domain.organizationId,
+          domainId: domain.id,
+          reporter: report.reporter,
+          reportId: report.reportId,
+          dateBegin: report.dateBegin,
+          dateEnd: report.dateEnd,
+          policy: report.policy,
+          messageCount: report.messageCount,
+          dmarcPass: report.dmarcPass,
+          records: report.records as unknown as Prisma.InputJsonArray,
+        },
+      });
+      stored++;
+    }
+  }
+  return stored;
 }
 
 async function forwardToOps(message: InboundMessage, subject: string | undefined, redis: Redis): Promise<InboundOutcome> {

@@ -206,6 +206,8 @@ npm run build:console                                 # console build and type c
 TREDMAIL_API_KEY=tred_live_... npm run test:smoke     # send -> worker -> Mailpit -> tracking
 npm run test:accounts                                 # sign-up, workspace, sandbox, invitations, roles
 TREDMAIL_API_KEY=tred_live_... npm run test:delivery  # KumoMTA: delivered, bounced, complained, forwarded
+TREDMAIL_API_KEY=tred_live_... npm run test:developer # templates, idempotency, scheduling, SMTP relay, webhooks, DMARC
+npm run openapi:export                                # after changing packages/core/src/openapi/spec.ts
 ```
 
 ### Security rules
@@ -217,6 +219,17 @@ TREDMAIL_API_KEY=tred_live_... npm run test:delivery  # KumoMTA: delivered, boun
 ### Production
 
 `deploy-hostinger.sh` provisions Docker, generates every secret, applies migrations and seeds the organization. Production runs KumoMTA (`mta/policy/init.lua`) as the delivery engine on port 25: the worker hands it DKIM-signed mail with a per-message VERP return path, and KumoMTA reports deliveries, delays and bounces back to the API, which also parses returned bounce reports and spam complaints. Server, reverse DNS and DNS setup: [docs/PRODUCTION_INFRASTRUCTURE.md](docs/PRODUCTION_INFRASTRUCTURE.md).
+
+Applications that send with SMTP use the relay (`apps/smtp-relay`, ports 587/465, password = API key). Caddy obtains the TLS certificates for the mail hostnames and `scripts/cert-sync.sh` (cron, installed by the deploy script) hands them to KumoMTA and the relay, which also enables MTA-STS.
+
+### Developer product
+
+- API reference: `GET /v1/openapi.json`, rendered at `/docs/api` in the console with guides at `/docs`. `apps/api/tests/openapi.test.ts` fails when a public route is undocumented.
+- SDKs: `packages/sdk-node` (`@dovepeak/tredmail`) and `packages/sdk-python` (`tredmail`, standard library only).
+- Sending: templates with `{{variables}}`, `scheduled_at`, cancel/reschedule, `Idempotency-Key`. The database is the outbox: queue jobs carry only ids, and the worker re-queues anything Redis lost.
+- Webhooks: queued with retries for ~27 hours, a delivery log, replay, pause and secret rotation.
+
+Run the SMTP relay locally with `npm run dev:smtp` (set `SMTP_RELAY_PORT=2587`).
 
 Test the delivery engine locally with `docker compose --profile mta up -d`, then run the API and worker with `SMTP_HOST=localhost SMTP_PORT=2525 OPS_EMAIL=ops@example.com` and `TREDMAIL_API_KEY=tred_live_... npm run test:delivery`.
 

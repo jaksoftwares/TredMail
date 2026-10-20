@@ -1,10 +1,24 @@
 {
   "name": "@dovepeak/tredmail",
-  "version": "0.1.0",
+  "version": "1.3.0",
   "private": true,
+  "description": "Node.js SDK for TredMail, the transactional email API by Dovepeak Technologies",
+  "license": "UNLICENSED",
+  "author": "Dovepeak Technologies",
+  "homepage": "https://console.tredmail.dovepeakdigital.com/docs",
   "type": "module",
-  "description": "TredMail Node.js SDK",
+  "engines": { "node": ">=18" },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean --target node18"
   }
 }

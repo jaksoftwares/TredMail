@@ -14,9 +14,23 @@ interface EmailRow {
   subject: string;
   status: string;
   created_at: string;
+  scheduled_at: string | null;
 }
 
-const STATUSES = ["queued", "sending", "sent", "delivered", "failed", "bounced", "complained"];
+interface TemplateOption {
+  id: string;
+  alias: string;
+  name: string;
+  variables: string[];
+}
+
+const STATUSES = ["scheduled", "queued", "sending", "sent", "delivered", "failed", "bounced", "complained", "canceled"];
+const PERIODS: { value: string; label: string; hours: number | null }[] = [
+  { value: "all", label: "Any time", hours: null },
+  { value: "24h", label: "Last 24 hours", hours: 24 },
+  { value: "7d", label: "Last 7 days", hours: 24 * 7 },
+  { value: "30d", label: "Last 30 days", hours: 24 * 30 },
+];
 
 function SendEmailDialog({ open, onClose, onSent }: { open: boolean; onClose: () => void; onSent: (id: string) => void }) {
   const { me } = useWorkspace();
@@ -24,23 +38,30 @@ function SendEmailDialog({ open, onClose, onSent }: { open: boolean; onClose: ()
   const [to, setTo] = useState(me.user.email);
   const [subject, setSubject] = useState("Hello from TredMail");
   const [body, setBody] = useState("This message was sent from the TredMail console.");
+  const [templateAlias, setTemplateAlias] = useState("");
+  const [variables, setVariables] = useState<Record<string, string>>({});
+  const [sendAt, setSendAt] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const { data: templateList } = useApi<{ data: TemplateOption[] }>(open ? "/v1/templates" : null);
+  const template = templateList?.data.find((t) => t.alias === templateAlias);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError(null);
     try {
+      const recipients = to.split(",").map((s) => s.trim()).filter(Boolean);
+      const content = template
+        ? { template: template.alias, variables }
+        : {
+            subject,
+            text: body,
+            html: `<p>${body.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!).replace(/\n/g, "<br>")}</p>`,
+          };
       const result = await api<{ id: string }>("/v1/emails", {
         method: "POST",
-        body: {
-          from,
-          to: to.split(",").map((s) => s.trim()).filter(Boolean),
-          subject,
-          text: body,
-          html: `<p>${body.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!).replace(/\n/g, "<br>")}</p>`,
-        },
+        body: { from, to: recipients, ...content, ...(sendAt ? { scheduled_at: new Date(sendAt).toISOString() } : {}) },
       });
       onSent(result.id);
     } catch (err) {
@@ -60,15 +81,38 @@ function SendEmailDialog({ open, onClose, onSent }: { open: boolean; onClose: ()
         <Field label="To" hint="Separate several addresses with commas.">
           <Input required value={to} onChange={(e) => setTo(e.target.value)} />
         </Field>
-        <Field label="Subject">
-          <Input required value={subject} onChange={(e) => setSubject(e.target.value)} />
-        </Field>
-        <Field label="Message">
-          <Textarea required rows={5} value={body} onChange={(e) => setBody(e.target.value)} />
+        {templateList && templateList.data.length > 0 && (
+          <Field label="Template" hint="Optional. The template supplies the subject and body.">
+            <Select value={templateAlias} onChange={(e) => setTemplateAlias(e.target.value)}>
+              <option value="">No template</option>
+              {templateList.data.map((t) => (
+                <option key={t.id} value={t.alias}>{t.name} ({t.alias})</option>
+              ))}
+            </Select>
+          </Field>
+        )}
+        {template ? (
+          template.variables.map((name) => (
+            <Field key={name} label={`{{${name}}}`}>
+              <Input value={variables[name] ?? ""} onChange={(e) => setVariables({ ...variables, [name]: e.target.value })} />
+            </Field>
+          ))
+        ) : (
+          <>
+            <Field label="Subject">
+              <Input required value={subject} onChange={(e) => setSubject(e.target.value)} />
+            </Field>
+            <Field label="Message">
+              <Textarea required rows={5} value={body} onChange={(e) => setBody(e.target.value)} />
+            </Field>
+          </>
+        )}
+        <Field label="Send at" hint="Optional, up to 30 days ahead. Leave empty to send now.">
+          <Input type="datetime-local" value={sendAt} onChange={(e) => setSendAt(e.target.value)} />
         </Field>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button type="submit" loading={loading}><Send className="size-3.5" />Send</Button>
+          <Button type="submit" loading={loading}><Send className="size-3.5" />{sendAt ? "Schedule" : "Send"}</Button>
         </div>
       </form>
     </Dialog>
@@ -78,6 +122,7 @@ function SendEmailDialog({ open, onClose, onSent }: { open: boolean; onClose: ()
 export default function EmailsPage() {
   const { can } = useWorkspace();
   const [status, setStatus] = useState("");
+  const [period, setPeriod] = useState("all");
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
   const [cursors, setCursors] = useState<string[]>([]);
@@ -85,6 +130,9 @@ export default function EmailsPage() {
 
   const params = new URLSearchParams({ limit: "25" });
   if (status) params.set("status", status);
+  const hours = PERIODS.find((p) => p.value === period)?.hours;
+  // Rounded to the minute so the SWR key (and the request) stays stable between renders
+  if (hours) params.set("after", new Date(Math.floor(Date.now() / 60_000) * 60_000 - hours * 3_600_000).toISOString());
   if (search) params.set("q", search);
   const cursor = cursors.at(-1);
   if (cursor) params.set("cursor", cursor);
@@ -110,7 +158,7 @@ export default function EmailsPage() {
             resetPaging();
           }}
         >
-          <Input placeholder="Search subject, sender or exact recipient" value={query} onChange={(e) => setQuery(e.target.value)} className="sm:max-w-sm" />
+          <Input placeholder="Search subject, sender, exact recipient or email ID" value={query} onChange={(e) => setQuery(e.target.value)} className="sm:max-w-sm" />
           <Select
             value={status}
             onChange={(e) => {
@@ -123,6 +171,19 @@ export default function EmailsPage() {
             <option value="">All statuses</option>
             {STATUSES.map((s) => (
               <option key={s} value={s}>{s}</option>
+            ))}
+          </Select>
+          <Select
+            value={period}
+            onChange={(e) => {
+              setPeriod(e.target.value);
+              resetPaging();
+            }}
+            className="sm:max-w-44"
+            aria-label="Period"
+          >
+            {PERIODS.map((p) => (
+              <option key={p.value} value={p.value}>{p.label}</option>
             ))}
           </Select>
           <Button type="submit" variant="secondary">Search</Button>
@@ -145,7 +206,9 @@ export default function EmailsPage() {
                   </td>
                   <td className="max-w-48 truncate px-4 py-3 text-muted">{e.from}</td>
                   <td className="px-4 py-3"><StatusBadge status={e.status} /></td>
-                  <td className="whitespace-nowrap px-4 py-3 text-muted">{formatDate(e.created_at)}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-muted">
+                    {e.status === "scheduled" && e.scheduled_at ? `Sends ${formatDate(e.scheduled_at)}` : formatDate(e.created_at)}
+                  </td>
                 </tr>
               ))}
             </Table>

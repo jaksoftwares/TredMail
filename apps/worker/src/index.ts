@@ -10,7 +10,9 @@ import { env } from "@tredmail/core/config/env";
 import { dispatchWebhookEvent } from "@tredmail/core/webhooks/dispatcher";
 import { createVerpCodec, returnPathDomainFor } from "@tredmail/core/mail/verp";
 import { msUntilNextUtcDay, reserveWarmupSlots, warmupCap } from "@tredmail/core/delivery/warmup";
+import { isStagingAllowlisted, parseAllowlist } from "@tredmail/core/delivery/staging-allowlist";
 import { startMonitor } from "./monitor.js";
+import { startWebhookWorker } from "./webhooks.js";
 
 const signer = createTrackingSigner(env.TREDMAIL_MASTER_ENCRYPTION_KEY);
 const verp = createVerpCodec(env.TREDMAIL_MASTER_ENCRYPTION_KEY);
@@ -39,27 +41,62 @@ const fallbackTransporter = env.FALLBACK_SMTP_HOST
     })
   : null;
 
-type Route = "mta" | "fallback";
+// Staging only: messages whose recipients are all on the allowlist go to a real mail server
+// instead of Mailpit, so the team can check real inboxes without risking anyone else.
+const stagingAllowlist = parseAllowlist(env.STAGING_DELIVERY_ALLOWLIST);
+const stagingTransporter =
+  env.STAGING_DELIVERY_SMTP_HOST && stagingAllowlist.length > 0
+    ? nodemailer.createTransport({
+        pool: true,
+        maxConnections: 2,
+        host: env.STAGING_DELIVERY_SMTP_HOST,
+        port: env.STAGING_DELIVERY_SMTP_PORT,
+        secure: false,
+        ignoreTLS: true, // KumoMTA's internal injection port
+      })
+    : null;
+
+type Route = "mta" | "fallback" | "staging";
 
 /**
  * Picks the route for a message: our own mail server while today's warm-up allowance lasts,
  * then the fallback relay. Returns null when the cap is reached and there is no fallback.
  */
-async function chooseRoute(recipientCount: number): Promise<Route | null> {
+async function chooseRoute(recipients: string[]): Promise<Route | null> {
+  if (stagingTransporter && recipients.every((r) => isStagingAllowlisted(r, stagingAllowlist))) return "staging";
   const cap = warmupCap(env.MTA_WARMUP_START);
-  if (await reserveWarmupSlots(redisConnection, cap, recipientCount)) return "mta";
+  if (await reserveWarmupSlots(redisConnection, cap, recipients.length)) return "mta";
   return fallbackTransporter ? "fallback" : null;
 }
 
+const transporterFor = (route: Route) =>
+  route === "mta" ? transporter : route === "staging" ? stagingTransporter! : fallbackTransporter!;
+
 const describe = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-async function deliver(job: Job<EmailJobData>, token?: string) {
-  const data = job.data;
+const SENDABLE = new Set(["QUEUED", "SCHEDULED", "SENDING"]);
 
-  const domain = await prisma.domain.findUnique({ where: { id: data.domainId } });
-  if (!domain) {
-    throw new UnrecoverableError(`Domain ${data.domainId} no longer exists.`);
+function categoryOf(tags: unknown): string {
+  const list = Array.isArray(tags) ? (tags as Array<{ name?: unknown; value?: unknown }>) : [];
+  const value = list.find((t) => t?.name === "category")?.value;
+  return (typeof value === "string" && value ? value : "transactional").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64) || "transactional";
+}
+
+async function deliver(job: Job<EmailJobData>, token?: string) {
+  const { emailId } = job.data;
+
+  const email = await prisma.email.findUnique({ where: { id: emailId }, include: { attachments: true, domain: true } });
+  if (!email) throw new UnrecoverableError(`Email ${emailId} no longer exists.`);
+  // Canceled, already sent, or finished by an earlier attempt: nothing to do.
+  if (!SENDABLE.has(email.status)) return { skipped: email.status };
+
+  // Rescheduled to a later time after this job was created
+  if (email.status === "SCHEDULED" && email.scheduledAt && email.scheduledAt.getTime() > Date.now() + 1000) {
+    await job.moveToDelayed(email.scheduledAt.getTime(), token);
+    throw new DelayedError();
   }
+
+  const domain = email.domain;
   if (domain.status !== "VERIFIED") {
     throw new UnrecoverableError(`Domain ${domain.name} is no longer verified.`);
   }
@@ -72,56 +109,61 @@ async function deliver(job: Job<EmailJobData>, token?: string) {
     throw new UnrecoverableError(`Cannot decrypt DKIM key for ${domain.name}: ${describe(err)}`);
   }
 
-  const recipients = [...data.to, ...(data.cc ?? []), ...(data.bcc ?? [])];
-  const route = await chooseRoute(recipients.length);
+  const recipients = [...email.to, ...email.cc, ...email.bcc];
+  const route = await chooseRoute(recipients);
   if (!route) {
     // Warm-up cap reached and no fallback relay: hold the message until tomorrow's allowance.
     const delay = msUntilNextUtcDay() + Math.floor(Math.random() * 15 * 60_000);
     await prisma.emailEvent.create({
-      data: { emailId: data.emailId, type: "DEFERRED", details: { reason: "warmup_cap_reached", retryAt: new Date(Date.now() + delay).toISOString() } },
+      data: { emailId, type: "DEFERRED", details: { reason: "warmup_cap_reached", retryAt: new Date(Date.now() + delay).toISOString() } },
     });
     await job.moveToDelayed(Date.now() + delay, token);
     throw new DelayedError();
   }
 
-  await prisma.email.update({ where: { id: data.emailId }, data: { status: "SENDING" } });
+  await prisma.email.update({ where: { id: emailId }, data: { status: "SENDING" } });
 
-  const prepared = prepareEmailBody(data.emailId, data.html, data.text, {
-    trackOpens: data.trackOpens,
-    trackClicks: data.trackClicks,
+  const prepared = prepareEmailBody(emailId, email.htmlBody ?? undefined, email.textBody ?? undefined, {
+    trackOpens: email.trackOpens,
+    trackClicks: email.trackClicks,
     trackingBaseUrl: env.TRACKING_BASE_URL,
     signer,
   });
 
-  // Our mail server gets a VERP envelope so bounces map back to this email. Other providers
-  // set their own return path.
+  // KumoMTA (production or staging) gets a VERP envelope so bounces map back to this email.
+  // Other providers set their own return path.
   const envelope =
-    route === "mta"
-      ? { from: verp.encode(data.emailId, returnPathDomainFor(domain, env.BOUNCE_DOMAIN)), to: recipients }
-      : undefined;
+    route === "fallback" ? undefined : { from: verp.encode(emailId, returnPathDomainFor(domain, env.BOUNCE_DOMAIN)), to: recipients };
 
-  const info = await (route === "mta" ? transporter : fallbackTransporter!).sendMail({
+  const customHeaders = ((email.metadata as { headers?: Record<string, string> } | null)?.headers ?? {}) as Record<string, string>;
+  const attachments =
+    email.attachments.length > 0
+      ? email.attachments.map((att) => ({
+          filename: att.filename,
+          content: Buffer.from(att.content),
+          contentType: att.contentType ?? undefined,
+          cid: att.contentId ?? undefined,
+        }))
+      : job.data.attachments?.map((att) => ({ filename: att.filename, content: Buffer.from(att.content, "base64"), contentType: att.contentType }));
+
+  const info = await transporterFor(route).sendMail({
     envelope,
-    from: data.from,
-    to: data.to,
-    cc: data.cc,
-    bcc: data.bcc,
-    replyTo: data.replyTo,
-    subject: data.subject,
+    from: email.from,
+    to: email.to,
+    cc: email.cc,
+    bcc: email.bcc,
+    replyTo: email.replyTo ?? undefined,
+    subject: email.subject,
     html: prepared.html,
     text: prepared.text,
-    messageId: `<${data.emailId}@${domain.name}>`,
+    messageId: `<${emailId}@${domain.name}>`,
     headers: {
-      ...data.headers,
-      "X-TredMail-ID": data.emailId,
+      ...customHeaders,
+      "X-TredMail-ID": emailId,
       // Gmail's feedback loop reports complaint rates per value: category, workspace, sender
-      "Feedback-ID": `${(data.category ?? "transactional").replace(/[^A-Za-z0-9_-]/g, "")}:${data.organizationId}:tredmail`,
+      "Feedback-ID": `${categoryOf(email.tags)}:${email.organizationId}:tredmail`,
     },
-    attachments: data.attachments?.map((att) => ({
-      filename: att.filename,
-      content: Buffer.from(att.content, "base64"),
-      contentType: att.contentType,
-    })),
+    attachments,
     dkim: {
       domainName: domain.name,
       keySelector: domain.dkimSelector,
@@ -134,12 +176,12 @@ async function deliver(job: Job<EmailJobData>, token?: string) {
   const sentAt = new Date();
   await prisma.$transaction([
     prisma.email.update({
-      where: { id: data.emailId },
+      where: { id: emailId },
       data: { status: "SENT", messageId: info.messageId, smtpResponse: info.response },
     }),
     prisma.emailEvent.create({
       data: {
-        emailId: data.emailId,
+        emailId,
         type: "SENT",
         details: {
           route,
@@ -151,11 +193,11 @@ async function deliver(job: Job<EmailJobData>, token?: string) {
     }),
   ]);
 
-  dispatchWebhookEvent(data.organizationId, "email.sent", {
-    email_id: data.emailId,
-    to: data.to,
-    from: data.from,
-    subject: data.subject,
+  await dispatchWebhookEvent(email.organizationId, "email.sent", {
+    email_id: emailId,
+    to: email.to,
+    from: email.from,
+    subject: email.subject,
     smtp_response: info.response,
     sent_at: sentAt.toISOString(),
   }).catch((err) => console.error("webhook dispatch failed", err));
@@ -169,6 +211,7 @@ export const emailWorker = new Worker<EmailJobData>(EMAIL_QUEUE_NAME, deliver, {
 });
 
 const monitor = startMonitor();
+const webhookWorker = startWebhookWorker();
 
 emailWorker.on("completed", (job) => {
   console.log(`[worker] sent ${job.id}`);
@@ -195,19 +238,17 @@ emailWorker.on("failed", async (job, err) => {
       return;
     }
 
-    await prisma.$transaction([
-      prisma.email.update({ where: { id: job.data.emailId }, data: { status: "FAILED", smtpResponse: reason } }),
-      prisma.emailEvent.create({
-        data: { emailId: job.data.emailId, type: "FAILED", details: { attempts: job.attemptsMade, error: reason } },
-      }),
-    ]);
+    const email = await prisma.email.update({ where: { id: job.data.emailId }, data: { status: "FAILED", smtpResponse: reason } });
+    await prisma.emailEvent.create({
+      data: { emailId: job.data.emailId, type: "FAILED", details: { attempts: job.attemptsMade, error: reason } },
+    });
     console.error(`[worker] ${job.id} failed permanently: ${reason}`);
 
-    await dispatchWebhookEvent(job.data.organizationId, "email.failed", {
-      email_id: job.data.emailId,
-      to: job.data.to,
-      from: job.data.from,
-      subject: job.data.subject,
+    await dispatchWebhookEvent(email.organizationId, "email.failed", {
+      email_id: email.id,
+      to: email.to,
+      from: email.from,
+      subject: email.subject,
       error: reason,
     });
   } catch (recordErr) {
@@ -216,9 +257,10 @@ emailWorker.on("failed", async (job, err) => {
 });
 
 const shutdown = async () => {
-  await Promise.allSettled([emailWorker.close(), monitor.close()]);
+  await Promise.allSettled([emailWorker.close(), monitor.close(), webhookWorker.close()]);
   transporter.close();
   fallbackTransporter?.close();
+  stagingTransporter?.close();
   await Promise.allSettled([prisma.$disconnect(), redisConnection.quit()]);
   process.exit(0);
 };
@@ -228,5 +270,6 @@ process.on("SIGINT", () => void shutdown());
 const cap = warmupCap(env.MTA_WARMUP_START);
 console.log(
   `[worker] TredMail delivery worker started (SMTP ${env.SMTP_HOST}:${env.SMTP_PORT}; ` +
-    `warm-up ${cap === null ? "off" : `cap ${cap}/day`}; fallback ${fallbackTransporter ? env.FALLBACK_SMTP_HOST : "none"})`,
+    `warm-up ${cap === null ? "off" : `cap ${cap}/day`}; fallback ${fallbackTransporter ? env.FALLBACK_SMTP_HOST : "none"}` +
+    `${stagingTransporter ? `; staging delivery to ${stagingAllowlist.length} allowlisted entries` : ""})`,
 );

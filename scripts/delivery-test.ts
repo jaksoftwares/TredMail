@@ -218,6 +218,18 @@ async function main() {
   });
   step("postmaster@ mail forwarded to OPS_EMAIL");
 
+  // 7. The public port is not an open relay: mail for other domains is refused
+  const relayAttempt = await deliverInbound(
+    "spammer@example.org",
+    "victim@gmail.com",
+    "From: spammer@example.org\r\nTo: victim@gmail.com\r\nSubject: relay test\r\n\r\nx\r\n",
+  ).then(
+    () => "accepted",
+    (err: Error & { responseCode?: number }) => `refused ${err.responseCode ?? ""}`,
+  );
+  assert.match(relayAttempt, /^refused/, "the public SMTP port must not relay to other domains");
+  step(`relay to an outside domain: ${relayAttempt.trim()}`);
+
   inbound.close();
   console.log("\nDelivery engine test passed.");
 }

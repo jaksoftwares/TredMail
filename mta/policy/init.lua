@@ -40,6 +40,21 @@ local SMART_HOST = setting('MTA_SMART_HOST', '')
 -- Bind outbound connections to a specific local IP (only when the server has several)
 local SOURCE_ADDRESS = setting('MTA_SOURCE_ADDRESS', '')
 
+-- Certificate for STARTTLS on port 25 (copied from Caddy by cert-sync). Until it exists,
+-- KumoMTA uses a self-signed one, which senders accept for opportunistic TLS but which
+-- MTA-STS would reject.
+local TLS_CERT = setting('MTA_TLS_CERT', '/certs/mta.crt')
+local TLS_KEY = setting('MTA_TLS_KEY', '/certs/mta.key')
+
+local function file_exists(path)
+  local f = io.open(path, 'r')
+  if f then
+    f:close()
+    return true
+  end
+  return false
+end
+
 local HOOK_QUEUE = 'tredmail_events'
 local INBOUND_QUEUE = 'tredmail_inbound'
 
@@ -47,11 +62,15 @@ if API_TOKEN == '' then
   error 'INTERNAL_API_TOKEN must be set: KumoMTA reports deliveries and bounces to the TredMail API with it'
 end
 
--- Domains whose mail TredMail receives: its own platform domain, its bounce domain, and
--- customers' bounces.<domain> CNAMEs that point at the bounce domain.
+-- Domains whose mail TredMail receives: its own platform domain, its bounce domain,
+-- customers' bounces.<domain> CNAMEs that point at the bounce domain, and the mail server's
+-- own name (Microsoft SNDS confirms access by mailing postmaster@<PTR name>).
 local function is_inbound_domain(domain)
   domain = domain:lower()
-  return domain == PRIMARY_DOMAIN or domain == BOUNCE_DOMAIN or domain:sub(1, 8) == 'bounces.'
+  return domain == PRIMARY_DOMAIN
+    or domain == BOUNCE_DOMAIN
+    or domain == MTA_HOSTNAME:lower()
+    or domain:sub(1, 8) == 'bounces.'
 end
 
 kumo.on('init', function()
@@ -66,12 +85,17 @@ kumo.on('init', function()
 
   -- Public port: receives reports and platform-domain mail, and never relays. (The broadcast
   -- address can never connect; an empty Lua table would be read as a map, not a list.)
-  kumo.start_esmtp_listener {
+  local public_listener = {
     listen = '0.0.0.0:25',
     hostname = MTA_HOSTNAME,
     relay_hosts = { '255.255.255.255/32' },
     max_message_size = 10 * 1024 * 1024,
   }
+  if file_exists(TLS_CERT) and file_exists(TLS_KEY) then
+    public_listener.tls_certificate = TLS_CERT
+    public_listener.tls_private_key = TLS_KEY
+  end
+  kumo.start_esmtp_listener(public_listener)
 
   -- Injection port for the TredMail worker. Not published outside the Docker network.
   kumo.start_esmtp_listener {

@@ -6,15 +6,17 @@
   "workspaces": [
     "packages/*",
     "apps/api",
-    "apps/worker"
+    "apps/worker",
+    "apps/smtp-relay"
   ],
   "scripts": {
     "dev:api": "npm run dev -w @tredmail/api",
     "dev:worker": "npm run dev -w @tredmail/worker",
     "dev:console": "npm run dev --prefix apps/console",
+    "dev:smtp": "npm run dev -w @tredmail/smtp-relay",
     "dev": "concurrently -n api,worker \"npm run dev:api\" \"npm run dev:worker\"",
     "dev:all": "concurrently -n api,worker,console \"npm run dev:api\" \"npm run dev:worker\" \"npm run dev:console\"",
-    "build": "npm run build -w @tredmail/api -w @tredmail/worker",
+    "build": "npm run build -w @tredmail/api -w @tredmail/worker -w @tredmail/smtp-relay",
     "typecheck": "tsc -p tsconfig.check.json",
     "lint": "eslint .",
     "test": "vitest run",
@@ -28,7 +30,9 @@
     "keys:revoke": "npm run keys:revoke -w @tredmail/api --",
     "test:accounts": "tsx scripts/accounts-test.ts",
     "build:console": "npm run build --prefix apps/console",
-    "test:delivery": "tsx scripts/delivery-test.ts"
+    "test:delivery": "tsx scripts/delivery-test.ts",
+    "test:developer": "tsx scripts/developer-test.ts",
+    "openapi:export": "tsx scripts/export-openapi.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

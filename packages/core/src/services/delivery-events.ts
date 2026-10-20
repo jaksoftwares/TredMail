@@ -12,6 +12,7 @@ import { classifyFailure, type FailureClassification } from "../mail/bounce-clas
  */
 
 const STATUS_RANK: Record<EmailStatus, number> = {
+  SCHEDULED: 0,
   QUEUED: 0,
   SENDING: 1,
   SENT: 2,
@@ -19,6 +20,7 @@ const STATUS_RANK: Record<EmailStatus, number> = {
   FAILED: 4,
   BOUNCED: 5,
   COMPLAINED: 6,
+  CANCELED: 7, // never sent, so no delivery event can apply
 };
 
 export type EventSource = "mta_log" | "dsn" | "arf" | "internal_api";

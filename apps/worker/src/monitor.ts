@@ -5,6 +5,8 @@ import { env } from "@tredmail/core/config/env";
 import { redisConnection } from "@tredmail/core/queue/redis";
 import { operationsAlertTemplate } from "@tredmail/core/mail/templates";
 import { sendSystemEmail } from "@tredmail/core/services/system-mailer";
+import { enqueueEmail } from "@tredmail/core/queue/email.queue";
+import { queueWebhookDelivery } from "@tredmail/core/webhooks/dispatcher";
 
 /**
  * Delivery health checks, every 15 minutes, emailed to OPS_EMAIL. Each alert type is sent at
@@ -169,14 +171,81 @@ export async function runHealthChecks(): Promise<Alert[]> {
   return alerts;
 }
 
-/** Schedules the checks (one schedule shared by all worker processes) and processes them. */
+const DAY_MS = 86_400_000;
+
+/** Erases old message bodies and deletes emails (with their events) past the retention limits. */
+export async function applyRetention(now = new Date()) {
+  const contentCutoff = new Date(now.getTime() - env.EMAIL_CONTENT_RETENTION_DAYS * DAY_MS);
+  const recordCutoff = new Date(now.getTime() - env.EMAIL_RECORD_RETENTION_DAYS * DAY_MS);
+  const unsent = ["SCHEDULED", "QUEUED", "SENDING"] as const;
+  const erased = await prisma.email.updateMany({
+    where: {
+      createdAt: { lt: contentCutoff },
+      status: { notIn: [...unsent] },
+      OR: [{ htmlBody: { not: null } }, { textBody: { not: null } }],
+    },
+    data: { htmlBody: null, textBody: null },
+  });
+  const attachments = await prisma.emailAttachment.deleteMany({
+    where: { email: { createdAt: { lt: contentCutoff }, status: { notIn: [...unsent] } } },
+  });
+  const deleted = await prisma.email.deleteMany({ where: { createdAt: { lt: recordCutoff } } });
+  await prisma.idempotencyKey.deleteMany({ where: { createdAt: { lt: new Date(now.getTime() - DAY_MS) } } });
+  await prisma.webhookDelivery.deleteMany({ where: { createdAt: { lt: contentCutoff }, status: { not: "pending" } } });
+  await prisma.dmarcReport.deleteMany({ where: { dateBegin: { lt: recordCutoff } } });
+  if (erased.count || deleted.count || attachments.count) {
+    console.log(`[retention] erased ${erased.count} message bodies and ${attachments.count} attachments, deleted ${deleted.count} old emails`);
+  }
+  return { erased: erased.count, attachments: attachments.count, deleted: deleted.count };
+}
+
+/**
+ * Outbox sweeper. The database is the source of truth for what must be sent; this re-queues
+ * anything Redis lost (an outage, a flushed instance). Queueing is a no-op for emails and
+ * deliveries whose job still exists, because job ids are the row ids.
+ */
+export async function sweepOutbox(now = new Date()) {
+  const stale = new Date(now.getTime() - 2 * 60_000);
+  const emails = await prisma.email.findMany({
+    where: {
+      OR: [
+        { status: "QUEUED", updatedAt: { lt: stale } },
+        { status: "SCHEDULED", scheduledAt: { lt: stale } },
+      ],
+    },
+    select: { id: true, organizationId: true, domainId: true },
+    take: 500,
+  });
+  for (const email of emails) {
+    await enqueueEmail({ emailId: email.id, organizationId: email.organizationId, domainId: email.domainId });
+  }
+  const deliveries = await prisma.webhookDelivery.findMany({
+    where: { status: "pending", nextAttemptAt: { lt: new Date(now.getTime() - 10 * 60_000) } },
+    select: { id: true },
+    take: 500,
+  });
+  for (const delivery of deliveries) await queueWebhookDelivery(delivery.id);
+  return { emails: emails.length, webhooks: deliveries.length };
+}
+
+/** Schedules health checks, the outbox sweeper and the daily retention run (shared by all worker processes). */
 export function startMonitor() {
   const queue = new Queue(QUEUE, { connection: redisConnection });
-  void queue
-    .upsertJobScheduler("delivery-health", { every: EVERY_MS }, { name: "health-check" })
-    .catch((err) => console.error("[monitor] could not schedule health checks", err));
-  const worker = new Worker(QUEUE, async () => (await runHealthChecks()).map((a) => a.key), { connection: redisConnection });
-  worker.on("failed", (_job, err) => console.error("[monitor] health check failed", err));
+  void Promise.all([
+    queue.upsertJobScheduler("delivery-health", { every: EVERY_MS }, { name: "health-check" }),
+    queue.upsertJobScheduler("outbox-sweep", { every: 60_000 }, { name: "outbox" }),
+    queue.upsertJobScheduler("data-retention", { pattern: "30 2 * * *", tz: "UTC" }, { name: "retention" }),
+  ]).catch((err) => console.error("[monitor] could not schedule maintenance jobs", err));
+  const worker = new Worker(
+    QUEUE,
+    async (job) => {
+      if (job.name === "retention") return applyRetention();
+      if (job.name === "outbox") return sweepOutbox();
+      return (await runHealthChecks()).map((a) => a.key);
+    },
+    { connection: redisConnection },
+  );
+  worker.on("failed", (job, err) => console.error(`[monitor] ${job?.name ?? "maintenance"} job failed`, err));
   return {
     async close() {
       await Promise.allSettled([worker.close(), queue.close()]);

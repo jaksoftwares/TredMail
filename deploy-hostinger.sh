@@ -45,6 +45,8 @@ fi
 # Inbound port 25 receives bounces and complaints; open it if the host firewall is active.
 if command -v ufw &> /dev/null && sudo ufw status | grep -q "Status: active"; then
     sudo ufw allow 25/tcp > /dev/null && echo "✅ Firewall allows inbound port 25"
+    # SMTP relay for applications (587 STARTTLS, 465 TLS)
+    sudo ufw allow 587/tcp > /dev/null && sudo ufw allow 465/tcp > /dev/null && echo "✅ Firewall allows the SMTP relay ports 587 and 465"
 fi
 if ss -ltn 2>/dev/null | grep -qE '(0\.0\.0\.0|\[::\]|\*):25 ' && ! docker ps --format '{{.Names}}' | grep -q kumomta; then
     echo "⚠️ WARNING: another mail server (Postfix/Exim) is listening on port 25; stop it so KumoMTA can bind the port."
@@ -67,8 +69,12 @@ ENV_FILE=".env"
 COMPOSE=(docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" -p "tredmail-$STAGE")
 if [ "$STAGE" = "staging" ]; then
     COMPOSE+=(--profile staging-relay)
+    # Real delivery to allowlisted team addresses, when configured in .env.staging
+    if [ -f "$ENV_FILE" ] && grep -qE '^STAGING_DELIVERY_ALLOWLIST=.+' "$ENV_FILE"; then
+        COMPOSE+=(--profile staging-delivery)
+    fi
 else
-    COMPOSE+=(--profile mta) # KumoMTA delivery engine on port 25
+    COMPOSE+=(--profile mta) # KumoMTA on port 25 and the SMTP relay on 587/465
 fi
 
 if [ ! -f "$ENV_FILE" ]; then
@@ -91,6 +97,9 @@ if [ ! -f "$ENV_FILE" ]; then
         if [ "$STAGE" = "staging" ]; then
             echo "SMTP_HOST=mailpit"
             echo "SMTP_PORT=1025"
+            echo "# Optional: deliver mail for these addresses/@domains for real (comma separated)"
+            echo "STAGING_DELIVERY_ALLOWLIST="
+            echo "STAGING_DELIVERY_SMTP_HOST=kumomta-staging"
         else
             echo "# The worker hands mail to KumoMTA inside the Docker network"
             echo "SMTP_HOST=kumomta"
@@ -105,6 +114,9 @@ if [ ! -f "$ENV_FILE" ]; then
             echo "FALLBACK_SMTP_PORT=587"
             echo "FALLBACK_SMTP_USER="
             echo "FALLBACK_SMTP_PASS="
+            echo "# SMTP relay hostname (its A record must point here) and MTA-STS mode (testing, then enforce)"
+            echo "SMTP_RELAY_HOSTNAME=${SMTP_RELAY_HOSTNAME:-smtp.tredmail.dovepeakdigital.com}"
+            echo "MTA_STS_MODE=testing"
         fi
     } > "$ENV_FILE"
     echo "🔑 Generated encryption key, internal token, session secret and database password."
@@ -118,7 +130,17 @@ echo "🗄️ Applying database migrations..."
 "${COMPOSE[@]}" run --rm --no-deps api npx prisma migrate deploy --schema=packages/db/prisma/schema.prisma
 "${COMPOSE[@]}" up -d
 
-# 7. Seed the platform and Dovepeak workspaces (prints an owner password and an API key once)
+# 7. Production: copy Caddy's certificates to KumoMTA and the SMTP relay now and twice a day.
+#    Caddy may need a minute to obtain them on the first deploy; the cron job catches up.
+if [ "$STAGE" = "production" ]; then
+    chmod +x scripts/cert-sync.sh
+    sleep 20
+    ./scripts/cert-sync.sh "tredmail-$STAGE" || true
+    echo "17 3,15 * * * root cd $(pwd) && ./scripts/cert-sync.sh tredmail-$STAGE >> /var/log/tredmail-cert-sync.log 2>&1" | sudo tee /etc/cron.d/tredmail-cert-sync > /dev/null
+    echo "🔐 Certificate sync scheduled (/etc/cron.d/tredmail-cert-sync)"
+fi
+
+# 8. Seed the platform and Dovepeak workspaces (prints an owner password and an API key once)
 echo "🌱 Seeding workspaces..."
 "${COMPOSE[@]}" run --rm --no-deps api node apps/api/dist/cli/seed.js
 

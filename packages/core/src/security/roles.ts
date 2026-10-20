@@ -10,7 +10,7 @@ export type WorkspaceRole = (typeof WORKSPACE_ROLES)[number];
 export const ROLE_SCOPES: Record<WorkspaceRole, ApiScope[]> = {
   OWNER: ["full_access"],
   ADMIN: ["full_access"],
-  DEVELOPER: ["emails:send", "emails:read", "domains:read", "stats:read"],
+  DEVELOPER: ["emails:send", "emails:read", "domains:read", "stats:read", "templates:manage"],
   VIEWER: ["emails:read", "domains:read", "stats:read"],
 };
 

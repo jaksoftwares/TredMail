@@ -11,6 +11,8 @@ export interface MimePart {
   params: Record<string, string>;
   /** Decoded body text (empty for multipart containers). */
   body: string;
+  /** Body exactly as transmitted (before transfer decoding); for binary attachments. */
+  rawBody?: string;
   parts: MimePart[];
   /** The nested message of a message/rfc822 or text/rfc822-headers part. */
   embedded?: MimePart;
@@ -126,6 +128,7 @@ export function parseMime(raw: string, depth = 0): MimePart {
 
   const body = decodeBody(rawBody, first(headers, "content-transfer-encoding"));
   part.body = body;
+  part.rawBody = rawBody;
   if (type === "message/rfc822" || type === "message/global") {
     part.embedded = parseMime(body, depth + 1);
   } else if (type === "text/rfc822-headers" || type === "message/rfc822-headers") {
@@ -207,4 +210,26 @@ export function parseInboundReport(raw: string): ParsedReport {
   }
 
   return { kind: "other", subject, from, autoReply };
+}
+
+export interface MimeAttachment {
+  filename?: string;
+  contentType: string;
+  content: Buffer;
+}
+
+/** Leaf parts that are files (or any non-text part), decoded to bytes. */
+export function findAttachments(root: MimePart): MimeAttachment[] {
+  const files: MimeAttachment[] = [];
+  for (const part of walk(root)) {
+    if (part.parts.length > 0 || part.rawBody === undefined) continue;
+    const disposition = first(part.headers, "content-disposition") ?? "";
+    const filename = /filename\*?="?([^";]+)"?/i.exec(disposition)?.[1] ?? part.params.name;
+    if (!filename && part.contentType.startsWith("text/")) continue;
+    const encoding = (first(part.headers, "content-transfer-encoding") ?? "").trim().toLowerCase();
+    const content =
+      encoding === "base64" ? Buffer.from(part.rawBody.replace(/\s+/g, ""), "base64") : Buffer.from(part.rawBody, "latin1");
+    files.push({ filename, contentType: part.contentType, content });
+  }
+  return files;
 }

@@ -3,7 +3,10 @@ import { env } from "../config/env.js";
 export interface ExpectedDnsRecord {
   recordType: "DKIM" | "SPF" | "DMARC" | "RETURN_PATH";
   type: "TXT" | "CNAME";
+  /** Fully qualified record name. */
   name: string;
+  /** Name relative to the domain, as most DNS panels ask for it ("@" for the domain itself). */
+  host: string;
   expectedValue: string;
   ttl: string;
   priority?: number;
@@ -19,7 +22,7 @@ export function generateExpectedDnsRecords(
 ): ExpectedDnsRecord[] {
   const cleanDomain = domainName.toLowerCase().trim();
 
-  const records: ExpectedDnsRecord[] = [
+  const records: Omit<ExpectedDnsRecord, "host">[] = [
     {
       recordType: "DKIM",
       type: "TXT",
@@ -38,7 +41,8 @@ export function generateExpectedDnsRecords(
       recordType: "DMARC",
       type: "TXT",
       name: `_dmarc.${cleanDomain}`,
-      expectedValue: `v=DMARC1; p=quarantine; rua=mailto:dmarc@${env.PRIMARY_DOMAIN}; pct=100;`,
+      // Start at p=none so nothing is blocked while reports confirm all mail passes; move to quarantine later
+      expectedValue: `v=DMARC1; p=none; rua=mailto:dmarc@${env.PRIMARY_DOMAIN}; pct=100;`,
       ttl: "Auto",
     },
   ];
@@ -54,5 +58,9 @@ export function generateExpectedDnsRecords(
       ttl: "Auto",
     });
   }
-  return records;
+  return withHosts(cleanDomain, records);
+}
+
+function withHosts(domain: string, records: Omit<ExpectedDnsRecord, "host">[]): ExpectedDnsRecord[] {
+  return records.map((r) => ({ ...r, host: r.name === domain ? "@" : r.name.slice(0, -(domain.length + 1)) }));
 }

@@ -45,3 +45,30 @@
 		respond 404
 	}
 }
+
+# Mail hostnames. Caddy only obtains and renews their certificates here; scripts/cert-sync.sh
+# copies them to KumoMTA (STARTTLS on port 25) and the SMTP relay (587/465).
+{$MTA_HOSTNAME} {$SMTP_RELAY_HOSTNAME} {
+	import security_headers
+	respond "TredMail mail service by Dovepeak Technologies" 200
+}
+
+# MTA-STS (RFC 8461): tells sending servers to require TLS with a valid certificate when they
+# deliver to TredMail's domains. Start in "testing" (failures are only reported via TLS-RPT),
+# then set MTA_STS_MODE=enforce and bump the id in the _mta-sts TXT records.
+mta-sts.{$PRIMARY_DOMAIN} mta-sts.{$BOUNCE_DOMAIN} {
+	import security_headers
+	handle /.well-known/mta-sts.txt {
+		header Content-Type "text/plain; charset=utf-8"
+		respond <<POLICY
+			version: STSv1
+			mode: {$MTA_STS_MODE}
+			mx: {$MTA_HOSTNAME}
+			max_age: 604800
+
+			POLICY 200
+	}
+	handle {
+		respond 404
+	}
+}

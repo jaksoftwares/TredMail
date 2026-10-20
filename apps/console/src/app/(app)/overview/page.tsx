@@ -5,7 +5,8 @@ import { useState } from "react";
 import { CheckCircle2, Circle, Send } from "lucide-react";
 import { api, errorMessage } from "@/lib/api";
 import { useApi, useWorkspace } from "@/lib/workspace";
-import { Alert, Button, Card, EmptyState, PageHeader, Spinner, StatusBadge, Table, formatDate } from "@/components/ui";
+import { Alert, Button, Card, EmptyState, PageHeader, Select, Spinner, StatusBadge, Table, formatDate } from "@/components/ui";
+import { DailyChart, type DayPoint } from "@/components/daily-chart";
 
 interface Stats {
   metrics: {
@@ -21,6 +22,16 @@ interface Stats {
     bounceRate: string;
   };
   recentEmails: { id: string; from: string; to: string[]; subject: string; status: string; createdAt: string }[];
+}
+
+interface DomainStats {
+  domain: string;
+  total: number;
+  delivered?: number;
+  bounced?: number;
+  complained?: number;
+  delivery_rate: string | null;
+  bounce_rate: string | null;
 }
 
 interface ListResponse<T> {
@@ -54,8 +65,11 @@ export default function OverviewPage() {
   const stats = useApi<Stats>("/v1/stats");
   const domains = useApi<ListResponse<{ status: string }>>("/v1/domains");
   const keys = useApi<ListResponse<{ revokedAt: string | null }>>(can.manageKeys ? "/v1/api-keys" : null);
-  const webhooks = useApi<ListResponse<unknown>>(can.manageKeys ? "/v1/webhooks" : null);
+  const webhooks = useApi<ListResponse<unknown>>(can.manageWebhooks ? "/v1/webhooks" : null);
   const members = useApi<ListResponse<unknown>>("/v1/members");
+  const [days, setDays] = useState(30);
+  const series = useApi<{ data: DayPoint[] }>(`/v1/stats/timeseries?days=${days}`);
+  const perDomain = useApi<{ data: DomainStats[] }>(`/v1/stats/domains?days=${days}`);
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -135,6 +149,40 @@ export default function OverviewPage() {
         <Metric label="Bounce rate" value={m.bounceRate} detail={`${m.bouncedCount} bounced`} />
         <Metric label="Failed" value={m.failedCount} detail="Not accepted after all retries" />
       </div>
+
+      <Card className="mb-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+          <div>
+            <h2 className="font-bold">Delivered per day</h2>
+            {series.data && (
+              <p className="text-xs text-muted">
+                {series.data.data.reduce((sum, d) => sum + d.delivered, 0).toLocaleString()} delivered,{" "}
+                {series.data.data.reduce((sum, d) => sum + d.bounced, 0).toLocaleString()} bounced,{" "}
+                {series.data.data.reduce((sum, d) => sum + d.complained, 0).toLocaleString()} spam complaints in the last {days} days (UTC)
+              </p>
+            )}
+          </div>
+          <Select value={String(days)} onChange={(e) => setDays(Number(e.target.value))} className="max-w-36" aria-label="Period">
+            <option value="7">Last 7 days</option>
+            <option value="30">Last 30 days</option>
+            <option value="90">Last 90 days</option>
+          </Select>
+        </div>
+        <div className="p-4">{series.data ? <DailyChart data={series.data.data} /> : <Spinner />}</div>
+        {perDomain.data && perDomain.data.data.length > 0 && (
+          <Table head={["Domain", "Emails", "Status delivered", "Delivery rate", "Bounce rate"]}>
+            {perDomain.data.data.map((d) => (
+              <tr key={d.domain}>
+                <td className="px-4 py-2 font-semibold text-navy">{d.domain}</td>
+                <td className="px-4 py-2 tabular-nums">{d.total.toLocaleString()}</td>
+                <td className="px-4 py-2 tabular-nums">{(d.delivered ?? 0).toLocaleString()}</td>
+                <td className="px-4 py-2 tabular-nums">{d.delivery_rate ?? "n/a"}</td>
+                <td className="px-4 py-2 tabular-nums">{d.bounce_rate ?? "n/a"}</td>
+              </tr>
+            ))}
+          </Table>
+        )}
+      </Card>
 
       <Card>
         <div className="flex items-center justify-between border-b border-line px-4 py-3">

@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.base.json",
-  "include": ["apps/api/**/*.ts", "apps/worker/**/*.ts", "packages/*/src/**/*.ts", "packages/*/tests/**/*.ts", "scripts/**/*.ts", "examples/**/*.ts", "tests/**/*.ts"],
+  "include": ["apps/api/**/*.ts", "apps/worker/**/*.ts", "apps/smtp-relay/**/*.ts", "packages/*/src/**/*.ts", "packages/*/tests/**/*.ts", "scripts/**/*.ts", "examples/**/*.ts", "tests/**/*.ts"],
   "exclude": ["**/node_modules/**", "**/dist/**"]
 }

@@ -8,6 +8,7 @@ export const API_SCOPES = [
   "webhooks:manage",
   "suppressions:manage",
   "stats:read",
+  "templates:manage",
 ] as const;
 
 export type ApiScope = (typeof API_SCOPES)[number];

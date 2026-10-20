@@ -1,3 +1,5 @@
+> **Superseded.** The maintained API description is the OpenAPI spec: `GET /v1/openapi.json`, rendered at `/docs/api` in the console (source: `packages/core/src/openapi/spec.ts`). This file is the original design note.
+
 # TredMail API Specification & Developer Guide
 
 TredMail's REST API is designed for developer ergonomics and follows the modern standards established by **Resend** and **Postmark**. In fact, TredMail's API endpoints are **drop-in compatible** with popular Resend SDKs simply by overriding the base URL.

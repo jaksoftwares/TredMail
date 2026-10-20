@@ -1,22 +1,14 @@
 import crypto from "crypto";
+import { Queue } from "bullmq";
 import type { Prisma, Webhook } from "@tredmail/db";
 import { prisma } from "@tredmail/db";
 import { env } from "../config/env.js";
+import { redisConnection } from "../queue/redis.js";
 import { assertPublicHttpUrl } from "../security/url-safety.js";
 
-export const WEBHOOK_EVENT_TYPES = [
-  "email.queued",
-  "email.sent",
-  "email.delivered",
-  "email.deferred",
-  "email.failed",
-  "email.opened",
-  "email.clicked",
-  "email.bounced",
-  "email.complained",
-] as const;
+import { WEBHOOK_EVENT_TYPES, type WebhookEventType } from "./events.js";
 
-export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];
+export { WEBHOOK_EVENT_TYPES, type WebhookEventType };
 
 export function generateWebhookSecret(): string {
   return `whsec_${crypto.randomBytes(24).toString("base64")}`;
@@ -39,13 +31,20 @@ export async function assertWebhookUrlAllowed(url: string) {
   await assertPublicHttpUrl(url, { allowPrivate: allowPrivateTargets() });
 }
 
-/** Delivers one event to one endpoint and records the attempt. Never throws. */
-export async function deliverWebhook(webhook: Webhook, event: WebhookEventType, data: Record<string, unknown>) {
-  const messageId = `msg_${crypto.randomUUID()}`;
-  const timestamp = Math.floor(Date.now() / 1000);
-  const payload = { type: event, created_at: new Date(timestamp * 1000).toISOString(), data };
-  const body = JSON.stringify(payload);
+export interface WebhookPayload {
+  type: string;
+  created_at: string;
+  data: Record<string, unknown>;
+}
 
+/**
+ * Makes one HTTP attempt. Never throws. The signature timestamp is the time of this
+ * attempt (receivers reject stale timestamps); the message id stays the same on every
+ * retry and replay so receivers can drop duplicates.
+ */
+export async function attemptWebhook(webhook: Pick<Webhook, "url" | "secret">, messageId: string, payload: WebhookPayload) {
+  const timestamp = Math.floor(Date.now() / 1000);
+  const body = JSON.stringify(payload);
   let statusCode = 0;
   let response: string;
   let success = false;
@@ -61,7 +60,7 @@ export async function deliverWebhook(webhook: Webhook, event: WebhookEventType, 
         "webhook-id": messageId,
         "webhook-timestamp": String(timestamp),
         "webhook-signature": signWebhookPayload(webhook.secret, messageId, timestamp, body),
-        "X-TredMail-Event": event,
+        "X-TredMail-Event": payload.type,
       },
       body,
       signal: AbortSignal.timeout(10_000),
@@ -72,24 +71,98 @@ export async function deliverWebhook(webhook: Webhook, event: WebhookEventType, 
   } catch (err) {
     response = err instanceof Error ? err.message : String(err);
   }
+  return { success, statusCode, response };
+}
 
+const newMessageId = () => `msg_${crypto.randomUUID().replace(/-/g, "")}`;
+const makePayload = (event: string, data: Record<string, unknown>): WebhookPayload => ({ type: event, created_at: new Date().toISOString(), data });
+
+/** Delivers one event right away with a single attempt and records it (the "send test" button). */
+export async function deliverWebhook(webhook: Webhook, event: WebhookEventType, data: Record<string, unknown>) {
+  const messageId = newMessageId();
+  const payload = makePayload(event, data);
+  const result = await attemptWebhook(webhook, messageId, payload);
   await prisma.webhookDelivery
-    .create({ data: { webhookId: webhook.id, event, payload: payload as Prisma.InputJsonObject, statusCode, response, success } })
+    .create({
+      data: {
+        webhookId: webhook.id,
+        event,
+        messageId,
+        payload: payload as unknown as Prisma.InputJsonObject,
+        status: result.success ? "succeeded" : "failed",
+        statusCode: result.statusCode,
+        response: result.response,
+        attempts: 1,
+        success: result.success,
+        lastAttemptAt: new Date(),
+      },
+    })
     .catch((err) => console.error("failed to record webhook delivery", err));
+  return { success: result.success, statusCode: result.statusCode };
+}
 
-  return { success, statusCode };
+// ---------------------------------------------------------------------------
+// Queued delivery with retries
+// ---------------------------------------------------------------------------
+
+export const WEBHOOK_QUEUE_NAME = "tredmail-webhooks";
+
+/** Delay before each retry: about 27 hours of retries over 10 attempts in total. */
+export const WEBHOOK_RETRY_DELAYS_MS = [30_000, 120_000, 600_000, 1_800_000, 3_600_000, 7_200_000, 14_400_000, 28_800_000, 43_200_000];
+
+export interface WebhookJobData {
+  deliveryId: string;
+}
+
+let webhookQueue: Queue<WebhookJobData> | null = null;
+export function getWebhookQueue() {
+  webhookQueue ??= new Queue<WebhookJobData>(WEBHOOK_QUEUE_NAME, {
+    connection: redisConnection,
+    defaultJobOptions: {
+      attempts: WEBHOOK_RETRY_DELAYS_MS.length + 1,
+      backoff: { type: "webhook" },
+      removeOnComplete: 1000,
+      removeOnFail: 5000,
+    },
+  });
+  return webhookQueue;
+}
+
+/** Queues delivery of an existing delivery record (first send, or a replay). */
+export async function queueWebhookDelivery(deliveryId: string, jobId = deliveryId) {
+  await getWebhookQueue().add("deliver", { deliveryId }, { jobId });
 }
 
 /**
- * Sends an event to every active endpoint of the organization subscribed to it.
- * Single attempt for now; queued retries arrive with webhooks v2 (roadmap Phase 3).
+ * Records the event for every active endpoint subscribed to it and queues delivery. The
+ * worker retries failures (WEBHOOK_RETRY_DELAYS_MS). Never throws into the caller's flow:
+ * a delivery that cannot be queued is still recorded as pending and picked up by the sweeper.
  */
-export async function dispatchWebhookEvent(
-  organizationId: string,
-  event: WebhookEventType,
-  data: Record<string, unknown>
-) {
+export async function dispatchWebhookEvent(organizationId: string, event: WebhookEventType, data: Record<string, unknown>) {
   const webhooks = await prisma.webhook.findMany({ where: { organizationId, isActive: true } });
   const targets = webhooks.filter((w) => w.subscribedTo.includes("*") || w.subscribedTo.includes(event));
-  await Promise.all(targets.map((webhook) => deliverWebhook(webhook, event, data)));
+  if (targets.length === 0) return;
+  const payload = makePayload(event, data);
+  for (const webhook of targets) {
+    const delivery = await prisma.webhookDelivery.create({
+      data: {
+        webhookId: webhook.id,
+        event,
+        messageId: newMessageId(),
+        payload: payload as unknown as Prisma.InputJsonObject,
+        status: "pending",
+        nextAttemptAt: new Date(),
+      },
+    });
+    await queueWebhookDelivery(delivery.id).catch((err) => console.error(`[webhooks] could not queue ${delivery.id}`, err));
+  }
+}
+
+/** Sends a delivery again from the start, with the same message id. */
+export async function replayWebhookDelivery(deliveryId: string) {
+  await prisma.webhookDelivery.update({
+    where: { id: deliveryId },
+    data: { status: "pending", nextAttemptAt: new Date() },
+  });
+  await queueWebhookDelivery(deliveryId, `${deliveryId}:replay:${Date.now()}`);
 }

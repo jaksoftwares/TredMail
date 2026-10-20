@@ -4,10 +4,10 @@ import { Suspense } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
-import { ArrowLeft } from "lucide-react";
-import { errorMessage } from "@/lib/api";
-import { useApi } from "@/lib/workspace";
-import { Alert, Card, PageHeader, Spinner, StatusBadge, formatDate } from "@/components/ui";
+import { ArrowLeft, Ban, SendHorizontal } from "lucide-react";
+import { api, errorMessage } from "@/lib/api";
+import { useApi, useWorkspace } from "@/lib/workspace";
+import { Alert, Button, Card, PageHeader, Spinner, StatusBadge, formatDate } from "@/components/ui";
 
 interface EmailDetail {
   id: string;
@@ -22,6 +22,9 @@ interface EmailDetail {
   text: string | null;
   status: string;
   created_at: string;
+  scheduled_at: string | null;
+  template: { id: string; alias: string } | null;
+  attachments: { filename: string; content_type: string | null; size: number }[];
   smtp_response: string | null;
   events: { id: string; type: string; timestamp: string; ip_address: string | null; user_agent: string | null; link_url: string | null; details: Record<string, unknown> | null }[];
 }
@@ -30,16 +33,39 @@ function eventDetail(e: EmailDetail["events"][number]): string | null {
   if (e.link_url) return e.link_url;
   const d = e.details;
   if (!d) return null;
-  if (typeof d.error === "string") return d.error;
-  if (typeof d.smtpResponse === "string") return d.smtpResponse;
-  if (typeof d.diagnostic_message === "string") return d.diagnostic_message;
-  return null;
+  const text = (key: string) => (typeof d[key] === "string" && d[key] ? (d[key] as string) : null);
+  if (d.reason === "warmup_cap_reached") return "Held until tomorrow: today's IP warm-up limit was reached";
+  if (typeof d.scheduledAt === "string") return `${d.rescheduled ? "Rescheduled" : "Scheduled"} for ${formatDate(d.scheduledAt)}`;
+  const parts = [
+    text("recipient"),
+    text("category") && `category: ${text("category")}`,
+    d.suppressed === true ? "recipient suppressed" : null,
+    text("diagnostic") ?? text("response") ?? text("error") ?? text("smtpResponse") ?? text("diagnostic_message"),
+    text("route") === "fallback" ? "sent through the fallback provider" : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : null;
 }
 
 function EmailDetailPageContent() {
   const { id } = useParams<{ id: string }>();
-  const { data, error } = useApi<EmailDetail>(`/v1/emails/${id}`, { refreshInterval: 5000 });
+  const { data, error, mutate } = useApi<EmailDetail>(`/v1/emails/${id}`, { refreshInterval: 5000 });
+  const { can } = useWorkspace();
   const [view, setView] = useState<"html" | "text">("html");
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function act(path: string, method: string, body?: unknown) {
+    setBusy(true);
+    setActionError(null);
+    try {
+      await api(path, { method, body });
+      await mutate();
+    } catch (err) {
+      setActionError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   if (error) return <Alert tone="danger">{errorMessage(error)}</Alert>;
   if (!data) return <Spinner />;
@@ -50,9 +76,15 @@ function EmailDetailPageContent() {
     ...(data.cc.length ? ([["Cc", data.cc.join(", ")]] as [string, string][]) : []),
     ...(data.bcc.length ? ([["Bcc", data.bcc.join(", ")]] as [string, string][]) : []),
     ...(data.reply_to ? ([["Reply-to", data.reply_to]] as [string, string][]) : []),
+    ...(data.scheduled_at ? ([["Send at", formatDate(data.scheduled_at)]] as [string, string][]) : []),
+    ...(data.template ? ([["Template", data.template.alias]] as [string, string][]) : []),
+    ...(data.attachments.length
+      ? ([["Attachments", data.attachments.map((a) => `${a.filename} (${Math.max(1, Math.round(a.size / 1024))} KB)`).join(", ")]] as [string, string][])
+      : []),
     ["Created", formatDate(data.created_at)],
     ["ID", data.id],
   ];
+  const scheduled = data.status === "scheduled";
   const showHtml = view === "html" && data.html;
 
   return (
@@ -60,7 +92,25 @@ function EmailDetailPageContent() {
       <Link href="/emails" className="mb-4 inline-flex items-center gap-1 text-sm font-semibold text-navy hover:underline">
         <ArrowLeft className="size-4" /> Emails
       </Link>
-      <PageHeader title={data.subject} actions={<StatusBadge status={data.status} />} />
+      <PageHeader
+        title={data.subject}
+        actions={
+          <div className="flex items-center gap-2">
+            {scheduled && can.send && (
+              <>
+                <Button variant="secondary" size="sm" loading={busy} onClick={() => act(`/v1/emails/${data.id}`, "PATCH", { scheduled_at: new Date().toISOString() })}>
+                  <SendHorizontal className="size-3.5" />Send now
+                </Button>
+                <Button variant="danger" size="sm" loading={busy} onClick={() => act(`/v1/emails/${data.id}/cancel`, "POST")}>
+                  <Ban className="size-3.5" />Cancel
+                </Button>
+              </>
+            )}
+            <StatusBadge status={data.status} />
+          </div>
+        }
+      />
+      {actionError && <div className="mb-4"><Alert tone="danger">{actionError}</Alert></div>}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         <div className="space-y-6">

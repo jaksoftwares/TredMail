@@ -85,6 +85,25 @@ const envSchema = z
     FALLBACK_SMTP_SECURE: z.preprocess((val) => val === "true" || val === true, z.boolean()).default(false),
     FALLBACK_SMTP_USER: z.string().optional().default(""),
     FALLBACK_SMTP_PASS: z.string().optional().default(""),
+
+    // Staging only: recipients matching this list (addresses, or @domain) are delivered for
+    // real through STAGING_DELIVERY_SMTP_HOST (a KumoMTA); everything else stays in Mailpit.
+    STAGING_DELIVERY_ALLOWLIST: z.string().optional(),
+    STAGING_DELIVERY_SMTP_HOST: z.string().optional(),
+    STAGING_DELIVERY_SMTP_PORT: z.coerce.number().int().positive().default(2525),
+
+    // SMTP relay (apps/smtp-relay): applications send through TredMail with SMTP, the API key
+    // as password. TLS files come from Caddy's certificates via the cert-sync service.
+    SMTP_RELAY_HOSTNAME: z.string().default("smtp.tredmail.dovepeakdigital.com"),
+    SMTP_RELAY_PORT: z.coerce.number().int().positive().default(587),
+    SMTP_RELAY_TLS_PORT: z.coerce.number().int().positive().optional(), // implicit TLS, e.g. 465
+    SMTP_RELAY_TLS_CERT: z.string().optional(),
+    SMTP_RELAY_TLS_KEY: z.string().optional(),
+
+    // Data retention: message bodies are erased after this many days, and emails with their
+    // events are deleted after the second limit (13 months keeps a full year for reports).
+    EMAIL_CONTENT_RETENTION_DAYS: z.coerce.number().int().min(1).default(30),
+    EMAIL_RECORD_RETENTION_DAYS: z.coerce.number().int().min(30).default(395),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.NODE_ENV !== "production") return;

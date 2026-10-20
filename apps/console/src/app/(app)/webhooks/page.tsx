@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, type FormEvent } from "react";
 import { Plus } from "lucide-react";
 import { api, errorMessage } from "@/lib/api";
@@ -12,13 +13,18 @@ interface WebhookRow {
   subscribed_to: string[];
   is_active: boolean;
   total_deliveries: number;
+  failed_deliveries_7d: number;
   created_at: string;
 }
 
 const EVENTS: { value: string; help: string }[] = [
+  { value: "email.queued", help: "Accepted by the API, waiting to be sent" },
+  { value: "email.scheduled", help: "Accepted for sending at scheduled_at" },
+  { value: "email.canceled", help: "A scheduled email was canceled" },
   { value: "email.sent", help: "Accepted by the mail server" },
   { value: "email.delivered", help: "Confirmed by the recipient's server" },
-  { value: "email.failed", help: "Not accepted after all retries" },
+  { value: "email.deferred", help: "Temporarily refused; being retried" },
+  { value: "email.failed", help: "Not delivered after 72 hours of retries" },
   { value: "email.bounced", help: "Rejected by the recipient's server" },
   { value: "email.complained", help: "Marked as spam by the recipient" },
   { value: "email.opened", help: "" },
@@ -27,7 +33,7 @@ const EVENTS: { value: string; help: string }[] = [
 
 export default function WebhooksPage() {
   const { can } = useWorkspace();
-  const { data, error, mutate } = useApi<{ data: WebhookRow[] }>(can.manageKeys ? "/v1/webhooks" : null);
+  const { data, error, mutate } = useApi<{ data: WebhookRow[] }>(can.manageWebhooks ? "/v1/webhooks" : null);
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState("");
   const [events, setEvents] = useState<string[]>(["email.delivered", "email.bounced", "email.failed"]);
@@ -36,7 +42,7 @@ export default function WebhooksPage() {
   const [secret, setSecret] = useState<{ url: string; secret: string } | null>(null);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
-  if (!can.manageKeys) {
+  if (!can.manageWebhooks) {
     return (
       <>
         <PageHeader title="Webhooks" />
@@ -117,7 +123,13 @@ export default function WebhooksPage() {
           <Table head={["Endpoint", "Events", "Deliveries", "Created", ""]}>
             {data.data.map((w) => (
               <tr key={w.id}>
-                <td className="max-w-72 break-all px-4 py-3 font-mono text-xs">{w.url}</td>
+                <td className="max-w-72 px-4 py-3">
+                  <Link href={`/webhooks/${w.id}`} className="break-all font-mono text-xs font-semibold text-navy hover:underline">{w.url}</Link>
+                  <div className="mt-1 flex gap-1">
+                    {!w.is_active && <Badge tone="warning">paused</Badge>}
+                    {w.failed_deliveries_7d > 0 && <Badge tone="danger">{w.failed_deliveries_7d} failed in 7 days</Badge>}
+                  </div>
+                </td>
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-1">{w.subscribed_to.map((e) => <Badge key={e}>{e}</Badge>)}</div>
                 </td>

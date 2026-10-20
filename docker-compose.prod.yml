@@ -38,6 +38,12 @@ x-backend-env: &backend-env
   FALLBACK_SMTP_SECURE: ${FALLBACK_SMTP_SECURE:-false}
   FALLBACK_SMTP_USER: ${FALLBACK_SMTP_USER:-}
   FALLBACK_SMTP_PASS: ${FALLBACK_SMTP_PASS:-}
+  EMAIL_CONTENT_RETENTION_DAYS: ${EMAIL_CONTENT_RETENTION_DAYS:-30}
+  EMAIL_RECORD_RETENTION_DAYS: ${EMAIL_RECORD_RETENTION_DAYS:-395}
+  # Staging only: addresses (or @domains) that are delivered for real instead of to Mailpit
+  STAGING_DELIVERY_ALLOWLIST: ${STAGING_DELIVERY_ALLOWLIST:-}
+  STAGING_DELIVERY_SMTP_HOST: ${STAGING_DELIVERY_SMTP_HOST:-}
+  SMTP_RELAY_HOSTNAME: ${SMTP_RELAY_HOSTNAME:-smtp.tredmail.dovepeakdigital.com}
 
 services:
   postgres:
@@ -130,11 +136,54 @@ services:
       - ./mta/policy:/opt/kumomta/etc/policy:ro
       - kumomta_spool:/var/spool/kumomta
       - kumomta_logs:/var/log/kumomta
+      # Let's Encrypt certificate for STARTTLS, copied from Caddy by scripts/cert-sync.sh
+      - ./certs:/certs:ro
     healthcheck:
       test: ["CMD", "bash", "-c", "</dev/tcp/127.0.0.1/2525"]
       interval: 15s
       timeout: 5s
       retries: 6
+
+  # SMTP relay for applications that send through SMTP: port 587 (STARTTLS) and 465 (TLS),
+  # username anything, password an API key. Production only, like KumoMTA.
+  smtp-relay:
+    image: tredmail-backend:${TREDMAIL_VERSION:-latest}
+    command: ["node", "apps/smtp-relay/dist/index.js"]
+    profiles: ["mta"]
+    restart: always
+    depends_on:
+      api: { condition: service_healthy }
+    environment:
+      <<: *backend-env
+      SMTP_RELAY_PORT: 587
+      SMTP_RELAY_TLS_PORT: 465
+      SMTP_RELAY_TLS_CERT: /certs/smtp.crt
+      SMTP_RELAY_TLS_KEY: /certs/smtp.key
+    ports:
+      - "587:587"
+      - "465:465"
+    volumes:
+      - ./certs:/certs:ro
+
+  # Staging only, with --profile staging-delivery: a private KumoMTA (no public port) that
+  # delivers mail for STAGING_DELIVERY_ALLOWLIST to real inboxes. Set
+  # STAGING_DELIVERY_SMTP_HOST=kumomta-staging in .env.staging to use it.
+  kumomta-staging:
+    image: ghcr.io/kumocorp/kumomta:2026.09.29-b90d8bc1
+    profiles: ["staging-delivery"]
+    restart: always
+    depends_on:
+      api: { condition: service_healthy }
+    environment:
+      TREDMAIL_API_URL: http://api:3000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN}
+      MTA_HOSTNAME: ${MTA_HOSTNAME:-mta1.tredmail.dovepeakdigital.com}
+      PRIMARY_DOMAIN: ${PRIMARY_DOMAIN:-tredmail.dovepeakdigital.com}
+      BOUNCE_DOMAIN: ${BOUNCE_DOMAIN:-bounces.tredmail.dovepeakdigital.com}
+      MTA_RELAY_NETWORKS: ${MTA_RELAY_NETWORKS:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
+    volumes:
+      - ./mta/policy:/opt/kumomta/etc/policy:ro
+      - kumomta_staging_spool:/var/spool/kumomta
 
   caddy:
     image: caddy:2-alpine
@@ -146,6 +195,12 @@ services:
       CONSOLE_DOMAIN: ${CONSOLE_DOMAIN}
       API_DOMAIN: ${API_DOMAIN}
       TRACKING_DOMAIN: ${TRACKING_DOMAIN}
+      PRIMARY_DOMAIN: ${PRIMARY_DOMAIN:-tredmail.dovepeakdigital.com}
+      BOUNCE_DOMAIN: ${BOUNCE_DOMAIN:-bounces.tredmail.dovepeakdigital.com}
+      MTA_HOSTNAME: ${MTA_HOSTNAME:-mta1.tredmail.dovepeakdigital.com}
+      SMTP_RELAY_HOSTNAME: ${SMTP_RELAY_HOSTNAME:-smtp.tredmail.dovepeakdigital.com}
+      # testing | enforce (see docs/PRODUCTION_INFRASTRUCTURE.md)
+      MTA_STS_MODE: ${MTA_STS_MODE:-testing}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -164,6 +219,7 @@ services:
       MP_MAX_MESSAGES: 5000
 
 volumes:
+  kumomta_staging_spool:
   kumomta_spool:
   kumomta_logs:
   postgres_data:

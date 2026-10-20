@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useLayoutEffect, useState, type ReactNode } from "react";
-import { ChevronsUpDown, Globe, KeyRound, LayoutDashboard, LogOut, Mail, Menu, Settings, ShieldBan, Webhook, X } from "lucide-react";
+import { BookOpen, ChevronsUpDown, FileText, Globe, KeyRound, LayoutDashboard, LogOut, Mail, Menu, Settings, ShieldBan, Webhook, X } from "lucide-react";
 import { ProductLockup } from "@/components/brand";
 import { authClient } from "@/lib/auth-client";
 import { useWorkspace } from "@/lib/workspace";
@@ -11,11 +11,13 @@ import { useWorkspace } from "@/lib/workspace";
 const NAV = [
   { href: "/overview", label: "Overview", icon: LayoutDashboard },
   { href: "/emails", label: "Emails", icon: Mail },
+  { href: "/templates", label: "Templates", icon: FileText },
   { href: "/domains", label: "Domains", icon: Globe },
   { href: "/api-keys", label: "API keys", icon: KeyRound },
   { href: "/webhooks", label: "Webhooks", icon: Webhook },
   { href: "/suppressions", label: "Suppressions", icon: ShieldBan },
   { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/docs", label: "Docs", icon: BookOpen },
 ];
 
 /** Closes transient menus when the page they belong to is hidden by route preservation. */
