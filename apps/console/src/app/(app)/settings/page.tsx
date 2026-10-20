@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
 import { api, errorMessage } from "@/lib/api";
 import { useApi, useWorkspace } from "@/lib/workspace";
@@ -9,19 +10,12 @@ interface WorkspaceDetail {
   id: string;
   name: string;
   slug: string;
-  planTier: string;
+  plan: string;
+  planName: string;
   monthlyQuota: number;
   useCase: string | null;
   website: string | null;
 }
-
-const PLAN_LABEL: Record<string, string> = {
-  unlimited_internal: "Internal (unlimited)",
-  free: "Free",
-  pro: "Pro",
-  scale: "Scale",
-  enterprise: "Enterprise",
-};
 
 export default function GeneralSettingsPage() {
   const { can, refreshMe } = useWorkspace();
@@ -76,10 +70,15 @@ export default function GeneralSettingsPage() {
       </Card>
       <Card className="h-fit p-5 text-sm">
         <h2 className="mb-3 font-bold">Plan</h2>
-        <Badge tone="accent">{PLAN_LABEL[data.planTier] ?? data.planTier}</Badge>
+        <Badge tone="accent">{data.planName}</Badge>
         <p className="mt-3 text-muted">
           {data.monthlyQuota === 0 ? "No monthly sending limit." : `${data.monthlyQuota.toLocaleString()} emails per month.`}
         </p>
+        {can.viewBilling && (
+          <Link href="/billing" className="mt-3 inline-block font-semibold text-navy underline">
+            Plans, usage and invoices
+          </Link>
+        )}
         <p className="mt-3 text-xs text-subtle">Workspace ID: <span className="font-mono">{data.id}</span></p>
       </Card>
     </div>

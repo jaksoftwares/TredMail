@@ -8,7 +8,9 @@
     "build": "tsup",
     "start": "node dist/server.js",
     "seed": "tsx src/cli/seed.ts",
-    "keys:revoke": "tsx src/cli/revoke-api-key.ts"
+    "keys:revoke": "tsx src/cli/revoke-api-key.ts",
+    "staff": "tsx src/cli/staff.ts",
+    "payments:setup": "tsx src/cli/payments-setup.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.1",

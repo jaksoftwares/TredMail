@@ -118,11 +118,18 @@ const statusTones: Record<string, Tone> = {
   bounced: "danger",
   complained: "danger",
   suspended: "danger",
+  open: "warning",
+  paid: "success",
+  void: "neutral",
+  refunded: "neutral",
+  active: "success",
+  past_due: "danger",
+  paused: "danger",
 };
 
 export function StatusBadge({ status }: { status: string }) {
   const key = status.toLowerCase();
-  return <Badge tone={statusTones[key] ?? "neutral"}>{key}</Badge>;
+  return <Badge tone={statusTones[key] ?? "neutral"}>{key.replace(/_/g, " ")}</Badge>;
 }
 
 export function Alert({ tone = "info", children }: { tone?: "info" | "success" | "warning" | "danger"; children: ReactNode }) {

@@ -48,4 +48,16 @@ describe("Node SDK", () => {
     expect(list.error?.statusCode).toBe(404);
     expect(calls[2].url).toBe("https://api.test/v1/emails?status=bounced%2Cfailed&limit=5");
   });
+
+  it("reads usage and the price list", async () => {
+    const urls: string[] = [];
+    const fakeFetch = (async (url: string) => {
+      urls.push(url);
+      return new Response(JSON.stringify(url.endsWith("/plans") ? { data: [{ id: "pro" }] } : { emails_sent: 12, remaining: 2988 }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const client = new TredMail({ apiKey: "tred_live_x", baseUrl: "https://api.test/v1", fetch: fakeFetch });
+    expect((await client.usage.get()).data?.remaining).toBe(2988);
+    expect((await client.plans.list()).data?.data[0].id).toBe("pro");
+    expect(urls).toEqual(["https://api.test/v1/usage", "https://api.test/v1/plans"]);
+  });
 });

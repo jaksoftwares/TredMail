@@ -2,7 +2,7 @@ import { prisma, type Prisma } from "@tredmail/db";
 
 export interface AuditEntry {
   organizationId: string;
-  actorType: "user" | "api_key" | "system";
+  actorType: "user" | "api_key" | "system" | "staff";
   actorId?: string | null;
   action: string;
   targetType?: string;

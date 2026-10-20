@@ -32,24 +32,34 @@ model Organization {
   useCase String?
   website String?
 
-  // Plan and quota. New workspaces start on the free plan; Dovepeak's own workspace is
-  // seeded as "unlimited_internal". Enforcement arrives with billing (roadmap Phase 4).
+  // false for Dovepeak's own workspaces: exempt from automatic sending pauses.
+  // The plan and its limits live on the workspace's Subscription.
   isCommercial Boolean @default(true)
-  planTier     String  @default("free") // "free" | "pro" | "scale" | "enterprise" | "unlimited_internal"
-  monthlyQuota Int     @default(3000) // 0 = unlimited
+
+  // Staff suspension (abuse, fraud): sending is refused until a staff member lifts it.
+  suspendedAt        DateTime?
+  suspendedReason    String?
+  // Automatic circuit breaker (bounce or complaint rate too high). Staff resume it.
+  sendingPausedAt    DateTime?
+  sendingPauseReason String?
 
   // Relations
-  members      OrganizationMember[]
-  invitations  Invitation[]
-  auditLogs    AuditLog[]
-  domains      Domain[]
-  apiKeys      ApiKey[]
-  emails       Email[]
-  suppressions Suppression[]
-  webhooks     Webhook[]
-  templates    Template[]
-  idempotency  IdempotencyKey[]
-  dmarcReports DmarcReport[]
+  members        OrganizationMember[]
+  invitations    Invitation[]
+  auditLogs      AuditLog[]
+  domains        Domain[]
+  apiKeys        ApiKey[]
+  emails         Email[]
+  suppressions   Suppression[]
+  webhooks       Webhook[]
+  templates      Template[]
+  idempotency    IdempotencyKey[]
+  dmarcReports   DmarcReport[]
+  subscription   Subscription?
+  billingAccount BillingAccount?
+  usage          UsageDaily[]
+  invoices       Invoice[]
+  payments       Payment[]
 
   @@map("organizations")
 }
@@ -63,6 +73,8 @@ model User {
   emailVerified    Boolean  @default(false)
   image            String?
   twoFactorEnabled Boolean? @default(false)
+  // TredMail staff: may use the back-office (/v1/admin). Granted with `npm run staff:grant`.
+  isStaff          Boolean  @default(false)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -489,4 +501,244 @@ model WebhookDelivery {
   @@index([webhookId, success])
   @@index([webhookId, createdAt])
   @@map("webhook_deliveries")
+}
+
+// -------------------------------------------------------------
+// SaaS: plans, subscriptions, usage, invoices and payments
+// -------------------------------------------------------------
+
+/// A price list entry. Amounts are in minor units of `currency` (KES cents).
+model Plan {
+  id                  String   @id // "free", "pro", "scale", "enterprise", "internal"
+  name                String
+  description         String?
+  currency            String   @default("KES")
+  priceMonthly        Int      @default(0)
+  priceYearly         Int? // null = no yearly option
+  monthlyEmails       Int // included emails per month; 0 = unlimited
+  dailyEmails         Int      @default(0) // 0 = no daily cap
+  overagePricePer1000 Int? // null = sending stops at monthlyEmails
+  overageLimit        Int? // most extra emails per month; null = no limit
+  maxDomains          Int      @default(0) // 0 = unlimited
+  maxMembers          Int      @default(0) // 0 = unlimited
+  logRetentionDays    Int      @default(30)
+  features            String[] @default([])
+  isPublic            Boolean  @default(true) // offered in the plan picker
+  isActive            Boolean  @default(true)
+  sortOrder           Int      @default(0) // higher = bigger plan
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE // Renewal unpaid; still sending during the grace period
+}
+
+enum BillingInterval {
+  MONTH
+  YEAR
+}
+
+/// Every workspace has exactly one, created on first use (on the free plan).
+model Subscription {
+  id                  String             @id @default(cuid())
+  organizationId      String             @unique
+  planId              String
+  interval            BillingInterval    @default(MONTH)
+  status              SubscriptionStatus @default(ACTIVE)
+  currentPeriodStart  DateTime
+  currentPeriodEnd    DateTime
+  // Net amount paid for the current period: the base for the credit when upgrading mid-period
+  periodAmountPaid    Int                @default(0)
+  cancelAtPeriodEnd   Boolean            @default(false) // move to the free plan at period end
+  pendingPlanId       String? // downgrade or interval change applied at period end
+  pendingInterval     BillingInterval?
+  pastDueSince        DateTime?
+  // Staff overrides for custom (enterprise) deals; null = the plan's value
+  customPrice         Int? // per interval, minor units
+  customMonthlyEmails Int?
+  customDailyEmails   Int?
+  customMaxDomains    Int?
+  customMaxMembers    Int?
+  // Highest usage warning sent this period (0, 80 or 100 percent)
+  usageAlertLevel     Int                @default(0)
+  // Usage windows ending at or before this time are closed: overage billed, warnings reset
+  usageClosedThrough  DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan         Plan         @relation(fields: [planId], references: [id])
+  invoices     Invoice[]
+
+  @@index([currentPeriodEnd])
+  @@map("subscriptions")
+}
+
+/// Who pays and how: printed on invoices, and the phone number payment requests go to.
+model BillingAccount {
+  id             String   @id @default(cuid())
+  organizationId String   @unique
+  // Typed as the account number when paying by Paybill, e.g. TM7K3P9Q
+  accountCode    String   @unique
+  billingEmail   String?
+  companyName    String?
+  taxId          String? // e.g. KRA PIN
+  addressLine1   String?
+  addressLine2   String?
+  city           String?
+  country        String   @default("KE")
+  phone          String? // international format without +, e.g. 254712345678
+  // Send a payment request to `phone` automatically when a renewal invoice is issued
+  autoCollect    Boolean  @default(true)
+  creditBalance  Int      @default(0) // minor units; applied to the next invoice
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("billing_accounts")
+}
+
+/// Recipients accepted per workspace per UTC day: the meter for quotas and overage.
+model UsageDaily {
+  organizationId String
+  day            DateTime @db.Date
+  emails         Int      @default(0)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, day])
+  @@map("usage_daily")
+}
+
+enum InvoiceStatus {
+  OPEN
+  PAID
+  VOID
+}
+
+model Invoice {
+  id              String        @id @default(cuid())
+  number          String        @unique // e.g. INV2600001 (fits M-Pesa's 12-character account field)
+  organizationId  String
+  subscriptionId  String?
+  status          InvoiceStatus @default(OPEN)
+  // "plan_change" (checkout), "renewal", "overage" or "manual" (raised by staff)
+  purpose         String
+  currency        String
+  subtotal        Int
+  taxRate         Int           @default(0) // basis points: 1600 = 16%
+  tax             Int           @default(0)
+  total           Int
+  amountPaid      Int           @default(0)
+  periodStart     DateTime?
+  periodEnd       DateTime?
+  dueAt           DateTime
+  paidAt          DateTime?
+  voidedAt        DateTime?
+  // Customer and seller details as they were when the invoice was issued
+  billingDetails  Json
+  // plan_change and renewal: { planId, interval } to apply once paid
+  metadata        Json?
+  notes           String? // printed on the invoice (manual invoices)
+  autoCollectedAt DateTime? // payment request sent automatically
+  lastReminderAt  DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  lines        InvoiceLine[]
+  payments     Payment[]
+
+  @@index([organizationId, createdAt])
+  @@index([status, dueAt])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id          String    @id @default(cuid())
+  invoiceId   String
+  kind        String // "plan" | "overage" | "credit" | "adjustment"
+  description String
+  quantity    Int       @default(1)
+  unitAmount  Int
+  amount      Int
+  periodStart DateTime?
+  periodEnd   DateTime?
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_lines")
+}
+
+enum PaymentStatus {
+  PENDING // Waiting for the customer (e.g. the M-Pesa PIN prompt)
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+/// One attempt to collect money, through any gateway.
+model Payment {
+  id                String        @id @default(cuid())
+  organizationId    String? // null: received but not yet matched to a workspace
+  invoiceId         String?
+  gateway           String // registry id: "mpesa", "manual", ...
+  method            String // e.g. "mpesa_stk", "mpesa_paybill", "bank_transfer"
+  status            PaymentStatus @default(PENDING)
+  amount            Int
+  currency          String
+  // The gateway's id for the attempt (M-Pesa CheckoutRequestID) and its receipt number
+  providerReference String?
+  providerReceipt   String?
+  accountReference  String? // what the payer typed (Paybill account number)
+  payerPhone        String?
+  payerName         String?
+  failureCode       String?
+  failureMessage    String?
+  initiatedById     String? // user who started it, or staff member who recorded it
+  raw               Json? // last gateway payload
+  completedAt       DateTime?
+  refundedAt        DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  invoice      Invoice?      @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@unique([gateway, providerReference])
+  @@unique([gateway, providerReceipt])
+  @@index([organizationId, createdAt])
+  @@index([status, createdAt])
+  @@map("payments")
+}
+
+/// Every callback a gateway sent, kept for audit and troubleshooting.
+model PaymentCallback {
+  id        String   @id @default(cuid())
+  gateway   String
+  kind      String
+  payload   Json
+  ipAddress String?
+  outcome   String? // what TredMail did with it
+  createdAt DateTime @default(now())
+
+  @@index([gateway, createdAt])
+  @@map("payment_callbacks")
+}
+
+/// Sequential invoice numbers per year.
+model InvoiceSequence {
+  year Int @id
+  last Int @default(0)
+
+  @@map("invoice_sequences")
 }

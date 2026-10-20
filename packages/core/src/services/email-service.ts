@@ -1,6 +1,7 @@
 import { prisma, type Domain } from "@tredmail/db";
 import { enqueueEmail, removeQueuedEmail } from "../queue/email.queue.js";
 import { renderTemplate } from "../mail/template-engine.js";
+import { releaseUsage, reserveUsage } from "../billing/usage.js";
 import { env, PLATFORM_ORG_SLUG } from "../config/env.js";
 import { findReservedHeaders, MAX_SCHEDULE_DAYS, parseFromAddress, type SendEmailInput } from "./email-validation.js";
 
@@ -211,13 +212,21 @@ export async function acceptEmail(organizationId: string, payload: SendEmailInpu
     );
   }
 
+  const standing = await sendingStanding(organizationId);
+  if (!standing.ok) return standing;
+
+  // Count the recipients against the plan's limits last, so refused requests use nothing.
+  const usage = await reserveUsage(organizationId, allRecipients.length);
+  if (!usage.ok) return usage;
+
   const attachments = (payload.attachments ?? []).map((a) => {
     const bytes = Buffer.from(a.content, "base64");
     return { filename: a.filename, contentType: a.content_type, contentId: a.content_id, content: bytes, size: bytes.length };
   });
 
   const scheduledAt = schedule.at;
-  const email = await prisma.$transaction(async (tx) => {
+  const email = await prisma
+    .$transaction(async (tx) => {
     const created = await tx.email.create({
       data: {
         organizationId,
@@ -248,7 +257,11 @@ export async function acceptEmail(organizationId: string, payload: SendEmailInpu
       },
     });
     return created;
-  });
+    })
+    .catch(async (err) => {
+      await releaseUsage(organizationId, allRecipients.length, usage.day);
+      throw err;
+    });
 
   // The database row is the source of truth. If Redis is briefly unavailable, the worker's
   // outbox sweeper queues the email within a minute, so the request still succeeds.
@@ -271,6 +284,21 @@ export async function acceptEmail(organizationId: string, payload: SendEmailInpu
   };
 }
 
+/** Suspended workspaces (staff action) and paused ones (circuit breaker) cannot send. */
+async function sendingStanding(organizationId: string): Promise<{ ok: true } | Failure> {
+  const org = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { suspendedAt: true, sendingPausedAt: true, sendingPauseReason: true },
+  });
+  if (org?.suspendedAt) {
+    return fail(403, "workspace_suspended", "This workspace is suspended. Contact Dovepeak Technologies support.");
+  }
+  if (org?.sendingPausedAt) {
+    return fail(403, "sending_paused", `Sending is paused for this workspace: ${org.sendingPauseReason ?? "unusual bounce or complaint rates"}. Contact support to resume.`);
+  }
+  return { ok: true };
+}
+
 /** Cancels a scheduled email. Once an email is being sent it can no longer be canceled. */
 export async function cancelScheduledEmail(organizationId: string, emailId: string): Promise<{ ok: true } | Failure> {
   const updated = await prisma.email.updateMany({
@@ -283,6 +311,9 @@ export async function cancelScheduledEmail(organizationId: string, emailId: stri
     return fail(409, "not_cancelable", `Only scheduled emails can be canceled; this one is ${email.status.toLowerCase()}.`);
   }
   await prisma.emailEvent.create({ data: { emailId, type: "CANCELED" } });
+  // A canceled email is never sent, so it does not count towards the plan's usage
+  const canceled = await prisma.email.findUnique({ where: { id: emailId }, select: { to: true, cc: true, bcc: true, createdAt: true } });
+  if (canceled) await releaseUsage(organizationId, canceled.to.length + canceled.cc.length + canceled.bcc.length, canceled.createdAt);
   // The worker also skips canceled rows, so a failure here is harmless.
   await removeQueuedEmail(emailId).catch(() => undefined);
   return { ok: true };

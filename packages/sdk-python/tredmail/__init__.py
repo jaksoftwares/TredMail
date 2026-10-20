@@ -182,6 +182,18 @@ class Stats(_Resource):
         return self._client._request("GET", "/stats/domains", query={"days": days})
 
 
+class Usage(_Resource):
+    def get(self) -> Json:
+        """This month's usage against the workspace's plan (needs the stats:read scope)."""
+        return self._client._request("GET", "/usage")
+
+
+class Plans(_Resource):
+    def list(self) -> Json:
+        """The public price list. Amounts are in minor units (cents) of each plan's currency."""
+        return self._client._request("GET", "/plans")
+
+
 class TredMail:
     def __init__(self, api_key: str, base_url: str = DEFAULT_BASE_URL, timeout: float = 30.0) -> None:
         if not api_key:
@@ -195,6 +207,8 @@ class TredMail:
         self.webhooks = Webhooks(self)
         self.suppressions = Suppressions(self)
         self.stats = Stats(self)
+        self.usage = Usage(self)
+        self.plans = Plans(self)
 
     def _request(
         self,

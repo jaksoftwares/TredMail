@@ -11,12 +11,16 @@ export interface Workspace {
   id: string;
   name: string;
   slug: string;
-  planTier: string;
+  plan: string;
+  plan_name: string;
+  billing_status: "active" | "past_due";
+  suspended: boolean;
+  sending_paused: boolean;
   role: Role;
 }
 
 export interface Me {
-  user: { id: string; name: string; email: string; emailVerified: boolean; twoFactorEnabled: boolean | null; image: string | null };
+  user: { id: string; name: string; email: string; emailVerified: boolean; twoFactorEnabled: boolean | null; image: string | null; isStaff: boolean };
   workspaces: Workspace[];
   pending_invitations: { id: string; workspace: string; role: Role }[];
   sandbox_sender: string;
@@ -32,6 +36,8 @@ interface WorkspaceContextValue {
     manageWebhooks: boolean;
     manageTemplates: boolean;
     send: boolean;
+    viewBilling: boolean;
+    manageBilling: boolean;
   };
   switchWorkspace: (id: string) => void;
   refreshMe: () => Promise<unknown>;
@@ -64,7 +70,10 @@ export function WorkspaceProvider({ children, fallback }: { children: ReactNode;
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   useEffect(() => {
-    setSelectedId(readStoredWorkspace());
+    // Links in emails name the workspace (?workspace=...) so they open in the right one
+    const linked = new URLSearchParams(window.location.search).get("workspace");
+    if (linked) storeWorkspace(linked);
+    setSelectedId(linked ?? readStoredWorkspace());
   }, []);
 
   useEffect(() => {
@@ -105,6 +114,8 @@ export function WorkspaceProvider({ children, fallback }: { children: ReactNode;
       manageWebhooks: admin,
       manageTemplates: role !== "VIEWER",
       send: role !== "VIEWER",
+      viewBilling: admin,
+      manageBilling: role === "OWNER",
     },
     switchWorkspace,
     refreshMe: mutate,

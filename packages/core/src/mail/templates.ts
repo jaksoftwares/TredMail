@@ -18,12 +18,29 @@ export interface RenderedEmail {
 const escapeHtml = (value: string) =>
   value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-function layout(options: { preheader: string; heading: string; paragraphs: string[]; cta?: { label: string; url: string }; footnote?: string }) {
-  const { preheader, heading, paragraphs, cta, footnote } = options;
+export interface LayoutOptions {
+  preheader: string;
+  heading: string;
+  paragraphs: string[];
+  /** Label/value pairs shown as a table after the paragraphs (invoice details) */
+  rows?: Array<[string, string]>;
+  cta?: { label: string; url: string };
+  footnote?: string;
+}
+
+export function layout(options: LayoutOptions) {
+  const { preheader, heading, paragraphs, rows, cta, footnote } = options;
   const brandUrl = `${env.CONSOLE_URL.replace(/\/+$/, "")}/brand`;
-  const body = paragraphs
-    .map((p) => `<p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#000027;">${escapeHtml(p)}</p>`)
-    .join("");
+  const table = rows?.length
+    ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;border:1px solid #e4e4ef;border-radius:6px;border-collapse:separate;">${rows
+        .map(
+          ([label, value], i) =>
+            `<tr><td style="padding:9px 12px;font-size:14px;color:#4a4a63;${i ? "border-top:1px solid #e4e4ef;" : ""}">${escapeHtml(label)}</td><td align="right" style="padding:9px 12px;font-size:14px;font-weight:700;color:#000027;${i ? "border-top:1px solid #e4e4ef;" : ""}">${escapeHtml(value)}</td></tr>`,
+        )
+        .join("")}</table>`
+    : "";
+  const body =
+    paragraphs.map((p) => `<p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#000027;">${escapeHtml(p)}</p>`).join("") + table;
   const button = cta
     ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 24px;"><tr><td style="border-radius:6px;background:#FF6300;">
          <a href="${escapeHtml(cta.url)}" style="display:inline-block;padding:12px 22px;font-size:15px;font-weight:700;color:#000027;text-decoration:none;border-radius:6px;">${escapeHtml(cta.label)}</a>

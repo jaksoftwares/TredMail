@@ -7,6 +7,8 @@ import { api, errorMessage } from "@/lib/api";
 import { useApi, useWorkspace } from "@/lib/workspace";
 import { Alert, Button, Card, EmptyState, PageHeader, Select, Spinner, StatusBadge, Table, formatDate } from "@/components/ui";
 import { DailyChart, type DayPoint } from "@/components/daily-chart";
+import { UsageMeter } from "@/components/usage-meter";
+import { day, type Entitlements, type Usage } from "@/lib/billing";
 
 interface Stats {
   metrics: {
@@ -70,6 +72,7 @@ export default function OverviewPage() {
   const [days, setDays] = useState(30);
   const series = useApi<{ data: DayPoint[] }>(`/v1/stats/timeseries?days=${days}`);
   const perDomain = useApi<{ data: DomainStats[] }>(`/v1/stats/domains?days=${days}`);
+  const { data: usage } = useApi<Usage & { plan: Entitlements }>("/v1/usage");
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -149,6 +152,24 @@ export default function OverviewPage() {
         <Metric label="Bounce rate" value={m.bounceRate} detail={`${m.bouncedCount} bounced`} />
         <Metric label="Failed" value={m.failedCount} detail="Not accepted after all retries" />
       </div>
+
+      {usage && (
+        <Card className="mb-6 flex flex-col gap-4 p-5 md:flex-row md:items-center">
+          <div className="md:w-56">
+            <p className="text-xs font-semibold uppercase tracking-wide text-subtle">{usage.plan.plan_name} plan</p>
+            <p className="text-sm text-muted">Resets {day(usage.period_end)}</p>
+            {can.viewBilling && (
+              <Link href="/billing" className="text-sm font-semibold text-navy underline">
+                {usage.plan.price === 0 ? "Upgrade" : "Billing"}
+              </Link>
+            )}
+          </div>
+          <div className="grid flex-1 gap-4 sm:grid-cols-2">
+            <UsageMeter label="Emails this month" used={usage.emails_sent} limit={usage.monthly_limit} />
+            <UsageMeter label="Today" used={usage.emails_today} limit={usage.daily_limit} />
+          </div>
+        </Card>
+      )}
 
       <Card className="mb-6">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">

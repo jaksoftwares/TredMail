@@ -5,7 +5,8 @@
  *  - the platform workspace, which owns TredMail's own sending domain (PRIMARY_DOMAIN) used
  *    for account emails (no-reply@) and the sandbox sender (onboarding@)
  *  - the Dovepeak workspace on the unlimited internal plan, with dovepeakdigital.com
- *  - an owner login for both (SEED_ADMIN_EMAIL), with a generated password shown once
+ *  - an owner login for both (SEED_ADMIN_EMAIL), with a generated password shown once; it is
+ *    also TredMail staff, so it can open the back-office (/admin)
  *  - a full-access API key for the Dovepeak workspace, shown once
  *
  * In development the two domains are marked verified so mail flows to Mailpit. Anywhere else
@@ -19,16 +20,24 @@ import { generateApiKey } from "@tredmail/core/security/api-keys";
 import { encryptSecret } from "@tredmail/core/security/crypto";
 import { generateDkimKeypair } from "@tredmail/core/security/dkim-keys";
 import { generateExpectedDnsRecords } from "@tredmail/core/dns/generator";
+import { ensureSubscription } from "@tredmail/core/billing/subscriptions";
+import { INTERNAL_PLAN_ID } from "@tredmail/core/billing/plans";
 
 const markVerified = env.NODE_ENV === "development";
 const adminEmail = (process.env.SEED_ADMIN_EMAIL ?? "admin@dovepeakdigital.com").toLowerCase();
 
 async function ensureWorkspace(slug: string, name: string): Promise<Organization> {
-  return prisma.organization.upsert({
+  const org = await prisma.organization.upsert({
     where: { slug },
     update: {},
-    create: { slug, name, isCommercial: false, planTier: "unlimited_internal", monthlyQuota: 0 },
+    create: { slug, name, isCommercial: false },
   });
+  // Dovepeak's own workspaces are on the unlimited internal plan (the plans come with the migration)
+  const subscription = await ensureSubscription(org.id);
+  if (subscription.planId !== INTERNAL_PLAN_ID) {
+    await prisma.subscription.update({ where: { id: subscription.id }, data: { planId: INTERNAL_PLAN_ID } });
+  }
+  return org;
 }
 
 async function ensureDomain(organizationId: string, name: string) {
@@ -66,9 +75,9 @@ async function ensureDomain(organizationId: string, name: string) {
 async function ensureAdmin(workspaceIds: string[]) {
   let user = await prisma.user.findUnique({ where: { email: adminEmail } });
   if (!user) {
-    user = await prisma.user.create({ data: { email: adminEmail, name: "Dovepeak Administrator", emailVerified: true } });
-  } else if (!user.emailVerified) {
-    user = await prisma.user.update({ where: { id: user.id }, data: { emailVerified: true } });
+    user = await prisma.user.create({ data: { email: adminEmail, name: "Dovepeak Administrator", emailVerified: true, isStaff: true } });
+  } else if (!user.emailVerified || !user.isStaff) {
+    user = await prisma.user.update({ where: { id: user.id }, data: { emailVerified: true, isStaff: true } });
   }
 
   let password: string | null = null;

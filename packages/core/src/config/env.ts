@@ -104,6 +104,45 @@ const envSchema = z
     // events are deleted after the second limit (13 months keeps a full year for reports).
     EMAIL_CONTENT_RETENTION_DAYS: z.coerce.number().int().min(1).default(30),
     EMAIL_RECORD_RETENTION_DAYS: z.coerce.number().int().min(30).default(395),
+
+    // --- Billing ---
+    BILLING_CURRENCY: z.string().length(3).default("KES"),
+    // Tax added to invoices, in percent (Kenyan VAT is 16). 0 = no tax line.
+    BILLING_TAX_RATE: z.coerce.number().min(0).max(100).default(0),
+    BILLING_TAX_LABEL: z.string().default("VAT"),
+    // Dovepeak's tax registration (KRA PIN), printed on invoices
+    BILLING_TAX_ID: z.string().optional(),
+    // Days an unpaid renewal keeps the paid plan before the workspace moves to Free
+    BILLING_GRACE_DAYS: z.coerce.number().int().min(0).max(60).default(7),
+    // Renewal invoices are issued this many days before the period ends
+    BILLING_RENEWAL_NOTICE_DAYS: z.coerce.number().int().min(0).max(30).default(3),
+    // Automatic payment requests (M-Pesa prompts) are only sent between 08:00 and 20:00 here
+    BILLING_TIMEZONE: z.string().default("Africa/Nairobi"),
+    // Shown on invoices and billing emails as the address for billing questions
+    BILLING_SUPPORT_EMAIL: z.string().email().optional(),
+
+    // --- M-Pesa (Safaricom Daraja). The gateway is enabled when the four credentials are set. ---
+    MPESA_ENVIRONMENT: z.enum(["sandbox", "production"]).default("sandbox"),
+    // Overrides the Daraja URL (the local simulator, `npm run payments:simulator`)
+    MPESA_BASE_URL: z.string().url().optional(),
+    MPESA_CONSUMER_KEY: z.string().optional(),
+    MPESA_CONSUMER_SECRET: z.string().optional(),
+    // Business short code used for M-Pesa Express (STK push) and its passkey
+    MPESA_SHORTCODE: z.string().regex(/^\d{5,7}$/, "must be the 5 to 7 digit short code").optional(),
+    MPESA_PASSKEY: z.string().optional(),
+    // Paybill (CustomerPayBillOnline) or Till (CustomerBuyGoodsOnline)
+    MPESA_TRANSACTION_TYPE: z.enum(["CustomerPayBillOnline", "CustomerBuyGoodsOnline"]).default("CustomerPayBillOnline"),
+    // Till number receiving Buy Goods payments (defaults to MPESA_SHORTCODE)
+    MPESA_TILL_NUMBER: z.string().regex(/^\d{5,7}$/).optional(),
+    // Paybill number customers pay to by hand (Lipa na M-Pesa > Pay Bill). Defaults to
+    // MPESA_SHORTCODE for Paybill accounts; unset for Till-only accounts.
+    MPESA_PAYBILL_NUMBER: z.string().regex(/^\d{5,7}$/).optional(),
+    // Public HTTPS base URL Safaricom calls back (defaults to the origin of API_BASE_URL)
+    MPESA_CALLBACK_BASE_URL: z.string().url().optional(),
+    // Confirm each successful payment notification with Daraja's query API before accepting it
+    MPESA_VERIFY_CALLBACKS: z.preprocess((val) => val !== "false" && val !== false, z.boolean()).default(true),
+    // Optional comma-separated list of IP addresses allowed to send payment notifications
+    MPESA_ALLOWED_IPS: z.string().optional(),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.NODE_ENV !== "production") return;
@@ -134,6 +173,21 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ["SMTP_ALLOW_INVALID_CERTS"],
         message: "must not be enabled in production",
+      });
+    }
+    if (cfg.MPESA_BASE_URL && /localhost|127\.0\.0\.1/.test(cfg.MPESA_BASE_URL)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["MPESA_BASE_URL"],
+        message: "points at the local simulator; remove it in production",
+      });
+    }
+    const callbackBase = cfg.MPESA_CALLBACK_BASE_URL ?? cfg.API_BASE_URL;
+    if (cfg.MPESA_CONSUMER_KEY && !callbackBase.startsWith("https://")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["MPESA_CALLBACK_BASE_URL"],
+        message: "must be an https:// URL in production (Safaricom refuses plain HTTP callbacks)",
       });
     }
   });
@@ -174,6 +228,10 @@ export function assertApiSecrets(cfg: Env): void {
   const missing: string[] = [];
   if (!cfg.BETTER_AUTH_SECRET) missing.push("BETTER_AUTH_SECRET is required to run the API");
   if (cfg.NODE_ENV === "production" && !cfg.INTERNAL_API_TOKEN) missing.push("INTERNAL_API_TOKEN is required in production");
+  const mpesa = [cfg.MPESA_CONSUMER_KEY, cfg.MPESA_CONSUMER_SECRET, cfg.MPESA_SHORTCODE, cfg.MPESA_PASSKEY];
+  if (mpesa.some(Boolean) && !mpesa.every(Boolean)) {
+    missing.push("M-Pesa needs all of MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_SHORTCODE and MPESA_PASSKEY");
+  }
   if (missing.length > 0) {
     throw new Error(`Invalid TredMail API configuration:\n${missing.map((m) => `  - ${m}`).join("\n")}`);
   }

@@ -1,7 +1,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/server.ts", "src/cli/seed.ts", "src/cli/revoke-api-key.ts"],
+  entry: ["src/server.ts", "src/cli/seed.ts", "src/cli/revoke-api-key.ts", "src/cli/staff.ts", "src/cli/payments-setup.ts"],
   format: ["esm"],
   platform: "node",
   target: "node22",

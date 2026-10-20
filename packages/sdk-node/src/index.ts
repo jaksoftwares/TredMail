@@ -216,6 +216,38 @@ export interface Suppression {
   created_at: string;
 }
 
+/** Amounts are in minor units (cents) of `currency`. */
+export interface Plan {
+  id: string;
+  name: string;
+  description: string | null;
+  currency: string;
+  price_monthly: number;
+  price_yearly: number | null;
+  /** Included recipients per month; 0 = unlimited */
+  monthly_emails: number;
+  daily_emails: number;
+  overage_price_per_1000: number | null;
+  overage_limit: number | null;
+  max_domains: number;
+  max_members: number;
+  log_retention_days: number;
+  features: string[];
+}
+
+export interface Usage {
+  period_start: string;
+  period_end: string;
+  emails_sent: number;
+  emails_today: number;
+  monthly_limit: number;
+  daily_limit: number;
+  /** Recipients left before sending stops; null = no cap */
+  remaining: number | null;
+  overage_emails: number;
+  plan: Record<string, unknown>;
+}
+
 const toBase64 = (content: string | Buffer) => (typeof content === "string" ? content : content.toString("base64"));
 const toIso = (value: Date | string | undefined) => (value instanceof Date ? value.toISOString() : value);
 
@@ -389,6 +421,16 @@ export class TredMail {
     timeseries: (days = 30, domain?: string) =>
       this.request<{ days: number; start: string; data: Array<Record<string, number | string>> }>("GET", `/stats/timeseries${queryString({ days, domain })}`),
     domains: (days = 30) => this.request<{ days: number; data: Array<Record<string, unknown>> }>("GET", `/stats/domains?days=${days}`),
+  };
+
+  /** This month's usage against the workspace's plan (needs `stats:read`). */
+  readonly usage = {
+    get: () => this.request<Usage>("GET", "/usage"),
+  };
+
+  /** The public price list. */
+  readonly plans = {
+    list: () => this.request<{ data: Plan[] }>("GET", "/plans"),
   };
 }
 

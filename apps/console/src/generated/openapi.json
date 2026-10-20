@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "TredMail API",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "description": "Transactional email API by Dovepeak Technologies. Authenticate with `Authorization: Bearer tred_live_...`. Request and response bodies are JSON with snake_case fields. Errors share one shape: `{ statusCode, error, message }`.",
     "contact": {
       "name": "Dovepeak Technologies",
@@ -48,6 +48,10 @@
     {
       "name": "Stats",
       "description": "Sending and engagement metrics."
+    },
+    {
+      "name": "Usage and plans",
+      "description": "This month's usage against the workspace's plan, and the public price list."
     }
   ],
   "paths": {
@@ -2251,6 +2255,88 @@
           }
         }
       }
+    },
+    "/usage": {
+      "get": {
+        "summary": "Usage and limits",
+        "tags": [
+          "Usage and plans"
+        ],
+        "x-required-scope": "stats:read",
+        "description": "Recipients accepted this month (to, cc and bcc each count once) against the plan's allowance. Sends beyond the limits are refused with `429 daily_limit_exceeded` or `429 monthly_quota_exceeded`.\n\nRequires the `stats:read` scope.",
+        "responses": {
+          "200": {
+            "description": "Usage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Usage"
+                },
+                "example": {
+                  "period_start": "2026-10-01T00:00:00.000Z",
+                  "period_end": "2026-11-01T00:00:00.000Z",
+                  "emails_sent": 1250,
+                  "emails_today": 84,
+                  "monthly_limit": 50000,
+                  "daily_limit": 5000,
+                  "remaining": 148750,
+                  "overage_emails": 0,
+                  "plan": {
+                    "plan": "pro",
+                    "plan_name": "Pro",
+                    "currency": "KES",
+                    "interval": "month",
+                    "price": 250000,
+                    "monthly_emails": 50000,
+                    "daily_emails": 5000,
+                    "overage_price_per_1000": 12000,
+                    "overage_limit": 100000,
+                    "max_domains": 10,
+                    "max_members": 10,
+                    "log_retention_days": 30
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          }
+        }
+      }
+    },
+    "/plans": {
+      "get": {
+        "summary": "List plans",
+        "tags": [
+          "Usage and plans"
+        ],
+        "security": [],
+        "description": "The public price list. Amounts are in minor units (cents) of `currency`. No API key needed.",
+        "responses": {
+          "200": {
+            "description": "Plans",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Plan"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2284,7 +2370,7 @@
         }
       },
       "Error403": {
-        "description": "The key lacks the required scope, or the sender is not allowed.",
+        "description": "The key lacks the required scope, the sender is not allowed, the plan's limit is reached (`plan_limit_reached`), or sending is paused or suspended for the workspace.",
         "content": {
           "application/json": {
             "schema": {
@@ -2324,7 +2410,7 @@
         }
       },
       "Error429": {
-        "description": "Rate limit or sandbox limit reached. Retry later.",
+        "description": "Rate limit, sandbox limit or plan limit reached (`rate_limit_exceeded`, `sandbox_limit_reached`, `daily_limit_exceeded`, `monthly_quota_exceeded`).",
         "content": {
           "application/json": {
             "schema": {
@@ -3100,6 +3186,122 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "Plan": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "description": "ISO 4217 code, e.g. KES"
+          },
+          "price_monthly": {
+            "type": "integer",
+            "description": "Minor units (cents)"
+          },
+          "price_yearly": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Minor units; null when not offered yearly"
+          },
+          "monthly_emails": {
+            "type": "integer",
+            "description": "Included recipients per month; 0 = unlimited"
+          },
+          "daily_emails": {
+            "type": "integer",
+            "description": "0 = no daily cap"
+          },
+          "overage_price_per_1000": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Price per started 1,000 extra emails; null = sending stops at the allowance"
+          },
+          "overage_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Most extra emails per month"
+          },
+          "max_domains": {
+            "type": "integer",
+            "description": "0 = unlimited"
+          },
+          "max_members": {
+            "type": "integer",
+            "description": "0 = unlimited"
+          },
+          "log_retention_days": {
+            "type": "integer"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Usage": {
+        "type": "object",
+        "properties": {
+          "period_start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "period_end": {
+            "type": "string",
+            "description": "When the monthly allowance resets",
+            "format": "date-time"
+          },
+          "emails_sent": {
+            "type": "integer",
+            "description": "Recipients accepted this period"
+          },
+          "emails_today": {
+            "type": "integer",
+            "description": "Recipients accepted today (UTC)"
+          },
+          "monthly_limit": {
+            "type": "integer",
+            "description": "0 = unlimited"
+          },
+          "daily_limit": {
+            "type": "integer",
+            "description": "0 = no daily cap"
+          },
+          "remaining": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Recipients left before sending stops; null = no cap"
+          },
+          "overage_emails": {
+            "type": "integer",
+            "description": "Recipients above the allowance, billed at the plan's overage price"
+          },
+          "plan": {
+            "type": "object",
+            "description": "The workspace's plan with any custom terms applied"
           }
         }
       },

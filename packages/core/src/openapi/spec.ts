@@ -58,7 +58,7 @@ export const openApiSpec = {
   openapi: "3.1.0",
   info: {
     title: "TredMail API",
-    version: "1.3.0",
+    version: "1.4.0",
     description:
       "Transactional email API by Dovepeak Technologies. Authenticate with `Authorization: Bearer tred_live_...`. " +
       "Request and response bodies are JSON with snake_case fields. Errors share one shape: `{ statusCode, error, message }`.",
@@ -74,6 +74,7 @@ export const openApiSpec = {
     { name: "Suppressions", description: "Addresses TredMail will not send to." },
     { name: "API keys", description: "Keys for applications and services." },
     { name: "Stats", description: "Sending and engagement metrics." },
+    { name: "Usage and plans", description: "This month's usage against the workspace's plan, and the public price list." },
   ],
   paths: {
     "/emails": {
@@ -342,6 +343,32 @@ export const openApiSpec = {
         responses: { "200": ok("Per domain", obj({ days: int(), data: arr({ type: "object" }) })), ...errors(400, 401, 403) },
       }),
     },
+    "/usage": {
+      get: op("Usage and limits", ["Usage and plans"], "stats:read", {
+        description:
+          "Recipients accepted this month (to, cc and bcc each count once) against the plan's allowance. Sends beyond the limits are refused with `429 daily_limit_exceeded` or `429 monthly_quota_exceeded`.",
+        responses: { "200": ok("Usage", ref("Usage"), {
+          period_start: "2026-10-01T00:00:00.000Z",
+          period_end: "2026-11-01T00:00:00.000Z",
+          emails_sent: 1250,
+          emails_today: 84,
+          monthly_limit: 50000,
+          daily_limit: 5000,
+          remaining: 148750,
+          overage_emails: 0,
+          plan: { plan: "pro", plan_name: "Pro", currency: "KES", interval: "month", price: 250000, monthly_emails: 50000, daily_emails: 5000, overage_price_per_1000: 12000, overage_limit: 100000, max_domains: 10, max_members: 10, log_retention_days: 30 },
+        }), ...errors(401, 403) },
+      }),
+    },
+    "/plans": {
+      get: {
+        summary: "List plans",
+        tags: ["Usage and plans"],
+        security: [],
+        description: "The public price list. Amounts are in minor units (cents) of `currency`. No API key needed.",
+        responses: { "200": ok("Plans", obj({ data: arr(ref("Plan")) })) },
+      },
+    },
   },
   components: {
     securitySchemes: {
@@ -351,11 +378,11 @@ export const openApiSpec = {
       [
         [400, "The request is malformed or fails validation."],
         [401, "Missing or invalid API key."],
-        [403, "The key lacks the required scope, or the sender is not allowed."],
+        [403, "The key lacks the required scope, the sender is not allowed, the plan's limit is reached (`plan_limit_reached`), or sending is paused or suspended for the workspace."],
         [404, "Not found in this workspace."],
         [409, "Conflicts with the current state (e.g. canceling an email that is already sending)."],
         [422, "Understood but cannot be processed (e.g. suppressed recipient, unverified domain)."],
-        [429, "Rate limit or sandbox limit reached. Retry later."],
+        [429, "Rate limit, sandbox limit or plan limit reached (`rate_limit_exceeded`, `sandbox_limit_reached`, `daily_limit_exceeded`, `monthly_quota_exceeded`)."],
       ].map(([code, description]) => [`Error${code}`, { description, content: json(ref("Error")) }]),
     ),
     schemas: {
@@ -501,6 +528,33 @@ export const openApiSpec = {
         next_attempt_at: nullable(dateTime()),
       }),
       Suppression: obj({ id: str(), email: str(), reason: str(), diagnostic: nullable(str()), created_at: dateTime() }),
+      Plan: obj({
+        id: str(),
+        name: str(),
+        description: nullable(str()),
+        currency: str("ISO 4217 code, e.g. KES"),
+        price_monthly: int("Minor units (cents)"),
+        price_yearly: nullable(int("Minor units; null when not offered yearly")),
+        monthly_emails: int("Included recipients per month; 0 = unlimited"),
+        daily_emails: int("0 = no daily cap"),
+        overage_price_per_1000: nullable(int("Price per started 1,000 extra emails; null = sending stops at the allowance")),
+        overage_limit: nullable(int("Most extra emails per month")),
+        max_domains: int("0 = unlimited"),
+        max_members: int("0 = unlimited"),
+        log_retention_days: int(),
+        features: arr(str()),
+      }),
+      Usage: obj({
+        period_start: dateTime(),
+        period_end: dateTime("When the monthly allowance resets"),
+        emails_sent: int("Recipients accepted this period"),
+        emails_today: int("Recipients accepted today (UTC)"),
+        monthly_limit: int("0 = unlimited"),
+        daily_limit: int("0 = no daily cap"),
+        remaining: nullable(int("Recipients left before sending stops; null = no cap")),
+        overage_emails: int("Recipients above the allowance, billed at the plan's overage price"),
+        plan: { type: "object", description: "The workspace's plan with any custom terms applied" },
+      }),
       ApiKey: obj({ id: str(), name: str(), key_prefix: str(), scopes: arr(str()), created_at: dateTime(), last_used_at: nullable(dateTime()), expires_at: nullable(dateTime()) }),
     },
   },
@@ -536,4 +590,7 @@ export const UNDOCUMENTED_V1_PREFIXES = [
   "/v1/invitations",
   "/v1/audit-logs",
   "/v1/onboarding/",
+  "/v1/billing", // console billing (session only)
+  "/v1/admin/", // staff back-office
+  "/v1/payments/callbacks/", // payment gateway notifications
 ];

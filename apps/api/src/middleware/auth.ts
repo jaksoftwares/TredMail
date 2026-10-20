@@ -175,6 +175,41 @@ export const requireMemberManager: preHandlerHookHandler = async (request, reply
   }
 };
 
+/** Billing is visible to Owners and Admins in the console; only Owners change the plan. */
+export const requireBillingViewer: preHandlerHookHandler = async (request, reply) => {
+  const principal = request.principal;
+  if (principal?.kind !== "user" || !canManageMembers(principal.role)) {
+    return fail(reply, 403, "insufficient_role", "Only workspace Owners and Admins can see billing.");
+  }
+};
+
+export const requireBillingOwner: preHandlerHookHandler = async (request, reply) => {
+  const principal = request.principal;
+  if (principal?.kind !== "user" || principal.role !== "OWNER") {
+    return fail(reply, 403, "insufficient_role", "Only workspace Owners can change the plan or billing details.");
+  }
+};
+
+/**
+ * TredMail staff (the back-office): a signed-in console user with isStaff. In production
+ * staff must use two-factor authentication.
+ */
+export async function requireStaff(request: FastifyRequest, reply: FastifyReply) {
+  if (request.headers.authorization) {
+    return fail(reply, 403, "session_required", "The back-office is only available to signed-in staff.");
+  }
+  const user = await loadSessionUser(request);
+  if (!user) return fail(reply, 401, "unauthorized", "Sign in to continue.");
+  if (!passesCsrfCheck(request)) {
+    return fail(reply, 403, "forbidden_origin", "This request did not come from the TredMail console.");
+  }
+  const record = await prisma.user.findUnique({ where: { id: user.id }, select: { isStaff: true, twoFactorEnabled: true } });
+  if (!record?.isStaff) return fail(reply, 403, "staff_only", "This area is for TredMail staff.");
+  if (env.NODE_ENV === "production" && !record.twoFactorEnabled) {
+    return fail(reply, 403, "two_factor_required", "Turn on two-factor authentication (Settings, Security) to use the back-office.");
+  }
+}
+
 /**
  * Guard for internal endpoints (MTA callbacks). Requires INTERNAL_API_TOKEN.
  */

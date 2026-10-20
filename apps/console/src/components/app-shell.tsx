@@ -3,12 +3,12 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useLayoutEffect, useState, type ReactNode } from "react";
-import { BookOpen, ChevronsUpDown, FileText, Globe, KeyRound, LayoutDashboard, LogOut, Mail, Menu, Settings, ShieldBan, Webhook, X } from "lucide-react";
+import { BookOpen, ChevronsUpDown, CreditCard, FileText, Globe, KeyRound, LayoutDashboard, LogOut, Mail, Menu, Settings, ShieldBan, ShieldCheck, Webhook, X, type LucideIcon } from "lucide-react";
 import { ProductLockup } from "@/components/brand";
 import { authClient } from "@/lib/auth-client";
 import { useWorkspace } from "@/lib/workspace";
 
-const NAV = [
+const NAV: Array<{ href: string; label: string; icon: LucideIcon; billing?: boolean; staff?: boolean }> = [
   { href: "/overview", label: "Overview", icon: LayoutDashboard },
   { href: "/emails", label: "Emails", icon: Mail },
   { href: "/templates", label: "Templates", icon: FileText },
@@ -16,8 +16,10 @@ const NAV = [
   { href: "/api-keys", label: "API keys", icon: KeyRound },
   { href: "/webhooks", label: "Webhooks", icon: Webhook },
   { href: "/suppressions", label: "Suppressions", icon: ShieldBan },
+  { href: "/billing", label: "Billing", icon: CreditCard, billing: true },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/docs", label: "Docs", icon: BookOpen },
+  { href: "/admin", label: "Back-office", icon: ShieldCheck, staff: true },
 ];
 
 /** Closes transient menus when the page they belong to is hidden by route preservation. */
@@ -76,6 +78,8 @@ function WorkspaceSwitcher() {
 
 function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
+  const { me, can } = useWorkspace();
+  const items = NAV.filter((item) => (!item.billing || can.viewBilling) && (!item.staff || me.user.isStaff));
   return (
     <div className="flex h-full flex-col bg-navy px-3 py-4 text-offwhite">
       <Link href="/overview" className="mb-5 px-2" onClick={onNavigate} aria-label="TredMail overview">
@@ -83,7 +87,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       </Link>
       <WorkspaceSwitcher />
       <nav className="mt-5 flex-1 space-y-0.5" aria-label="Main">
-        {NAV.map(({ href, label, icon: Icon }) => {
+        {items.map(({ href, label, icon: Icon }) => {
           const active = pathname === href || pathname.startsWith(`${href}/`);
           return (
             <Link
@@ -128,18 +132,38 @@ function UserMenu() {
   );
 }
 
+/** Tells the workspace when sending is blocked or a payment is overdue. */
+function StandingBanner() {
+  const { workspace, can } = useWorkspace();
+  let message: string | null = null;
+  if (workspace.suspended) message = "This workspace is suspended, so emails cannot be sent. Contact Dovepeak Technologies support.";
+  else if (workspace.sending_paused) message = "Sending is paused because of a high bounce or complaint rate. Contact support to resume.";
+  else if (workspace.billing_status === "past_due") message = `A payment for the ${workspace.plan_name} plan is overdue. Pay it to keep the plan.`;
+  if (!message) return null;
+  return (
+    <div role="alert" className="mb-6 flex flex-col gap-2 rounded-md bg-danger-50 px-4 py-3 text-sm text-danger sm:flex-row sm:items-center sm:justify-between print:hidden">
+      <span className="font-semibold">{message}</span>
+      {can.viewBilling && (
+        <Link href="/billing" className="shrink-0 font-bold underline">
+          Open billing
+        </Link>
+      )}
+    </div>
+  );
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useTransient();
 
   return (
-    <div className="min-h-screen lg:grid lg:grid-cols-[248px_1fr]">
-      <aside className="hidden bg-navy lg:block">
+    <div className="min-h-screen lg:grid lg:grid-cols-[248px_1fr] print:block">
+      <aside className="hidden bg-navy lg:block print:hidden">
         <div className="sticky top-0 h-screen">
           <Sidebar />
         </div>
       </aside>
 
-      <header className="flex items-center justify-between bg-navy px-4 py-3 lg:hidden">
+      <header className="flex items-center justify-between bg-navy px-4 py-3 lg:hidden print:hidden">
         <Link href="/overview" aria-label="TredMail overview">
           <ProductLockup onDark compact />
         </Link>
@@ -159,8 +183,11 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       )}
 
-      <main className="min-w-0 px-4 py-6 sm:px-8 sm:py-8">
-        <div className="mx-auto max-w-6xl">{children}</div>
+      <main className="min-w-0 px-4 py-6 sm:px-8 sm:py-8 print:p-0">
+        <div className="mx-auto max-w-6xl">
+          <StandingBanner />
+          {children}
+        </div>
       </main>
     </div>
   );

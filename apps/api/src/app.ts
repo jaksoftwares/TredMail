@@ -20,8 +20,12 @@ import { bounceRoutes } from "./routes/bounces.js";
 import { mtaRoutes } from "./routes/mta.js";
 import { accountRoutes, invitationLookupRoute, workspaceRoutes } from "./routes/account.js";
 import { authHandlerRoutes } from "./routes/auth-handler.js";
+import { billingRoutes } from "./routes/billing.js";
+import { planRoutes, usageRoutes } from "./routes/usage.js";
+import { adminRoutes } from "./routes/admin.js";
+import { paymentCallbackRoutes } from "./routes/payment-callbacks.js";
 
-const VERSION = "1.3.0";
+const VERSION = "1.4.0";
 
 export interface BuildOptions {
   /** Called for every route as it is registered (used by the OpenAPI coverage test). */
@@ -95,6 +99,12 @@ export async function buildServer(options: BuildOptions = {}) {
     await api.register(workspaceRoutes, { prefix: "/v1" });
     await api.register(invitationLookupRoute, { prefix: "/v1" });
 
+    // Plans, usage and billing (console), and the staff back-office
+    await api.register(planRoutes, { prefix: "/v1" });
+    await api.register(usageRoutes, { prefix: "/v1" });
+    await api.register(billingRoutes, { prefix: "/v1" });
+    await api.register(adminRoutes, { prefix: "/v1/admin" });
+
     // Documented path for batch sending (also served at /v1/emails/batch)
     api.post("/v1/batch", { preHandler: [authenticate, requireScope("emails:send")] }, sendBatch);
   });
@@ -104,6 +114,9 @@ export async function buildServer(options: BuildOptions = {}) {
 
   // Public tracking routes: signed URLs, no API key, not counted against API limits.
   await fastify.register(trackingRoutes, { prefix: "/v1/track" });
+
+  // Payment gateway notifications (secret URL per gateway; not rate limited: providers retry)
+  await fastify.register(paymentCallbackRoutes);
 
   // Public API description (rendered by the console docs)
   await fastify.register(openApiRoutes);

@@ -8,6 +8,7 @@ import { verifyDomainDns } from "@tredmail/core/dns/verifier";
 import { auditActor, authenticate, requireScope } from "../middleware/auth.js";
 import { recordAudit } from "@tredmail/core/services/audit";
 import { env } from "@tredmail/core/config/env";
+import { checkPlanLimit } from "../plan-limits.js";
 
 const createDomainSchema = z.object({
   name: z.string().min(3).regex(/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/, "Invalid domain name format"),
@@ -77,6 +78,9 @@ export async function domainRoutes(fastify: FastifyInstance) {
         message: `Domain '${cleanName}' is already registered in your account.`,
       });
     }
+
+    const limit = await checkPlanLimit(orgId, "domains");
+    if (!limit.ok) return reply.status(limit.statusCode).send({ statusCode: limit.statusCode, error: limit.error, message: limit.message });
 
     // 1. Generate fresh RSA-2048 DKIM keypair
     const dkim = generateDkimKeypair();

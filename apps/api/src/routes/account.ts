@@ -8,6 +8,8 @@ import { recordAudit } from "@tredmail/core/services/audit";
 import { acceptEmail } from "@tredmail/core/services/email-service";
 import { sendSystemEmail } from "@tredmail/core/services/system-mailer";
 import { invitationTemplate, sandboxWelcomeTemplate } from "@tredmail/core/mail/templates";
+import { ensureBillingAccount, ensureSubscription, getEntitlements } from "@tredmail/core/billing/subscriptions";
+import { checkPlanLimit } from "../plan-limits.js";
 import {
   auditActor,
   authenticate,
@@ -85,11 +87,22 @@ export async function accountRoutes(fastify: FastifyInstance) {
     const [profile, memberships, invitations] = await Promise.all([
       prisma.user.findUnique({
         where: { id: user.id },
-        select: { id: true, name: true, email: true, emailVerified: true, twoFactorEnabled: true, image: true },
+        select: { id: true, name: true, email: true, emailVerified: true, twoFactorEnabled: true, image: true, isStaff: true },
       }),
       prisma.organizationMember.findMany({
         where: { userId: user.id, organization: { slug: { not: PLATFORM_ORG_SLUG } } },
-        include: { organization: { select: { id: true, name: true, slug: true, planTier: true } } },
+        include: {
+          organization: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+              suspendedAt: true,
+              sendingPausedAt: true,
+              subscription: { select: { planId: true, status: true, plan: { select: { name: true } } } },
+            },
+          },
+        },
         orderBy: { createdAt: "asc" },
       }),
       prisma.invitation.findMany({
@@ -100,7 +113,17 @@ export async function accountRoutes(fastify: FastifyInstance) {
 
     return {
       user: profile,
-      workspaces: memberships.map((m) => ({ ...m.organization, role: m.role })),
+      workspaces: memberships.map((m) => ({
+        id: m.organization.id,
+        name: m.organization.name,
+        slug: m.organization.slug,
+        plan: m.organization.subscription?.planId ?? "free",
+        plan_name: m.organization.subscription?.plan.name ?? "Free",
+        billing_status: (m.organization.subscription?.status ?? "ACTIVE").toLowerCase(),
+        suspended: Boolean(m.organization.suspendedAt),
+        sending_paused: Boolean(m.organization.sendingPausedAt),
+        role: m.role,
+      })),
       pending_invitations: invitations.map((i) => ({ id: i.id, workspace: i.organization.name, role: i.role })),
       sandbox_sender: `onboarding@${env.PRIMARY_DOMAIN}`,
     };
@@ -125,6 +148,8 @@ export async function accountRoutes(fastify: FastifyInstance) {
         members: { create: { userId: user.id, role: "OWNER" } },
       },
     });
+    await ensureSubscription(organization.id);
+    await ensureBillingAccount(organization.id);
 
     await recordAudit({
       organizationId: organization.id,
@@ -154,6 +179,15 @@ export async function accountRoutes(fastify: FastifyInstance) {
         error: "invitation_email_mismatch",
         message: `This invitation was sent to ${invitation.email}. Sign in with that verified address to accept it.`,
       });
+    }
+
+    const alreadyIn = await prisma.organizationMember.findUnique({
+      where: { organizationId_userId: { organizationId: invitation.organizationId, userId: user.id } },
+      select: { id: true },
+    });
+    if (!alreadyIn) {
+      const limit = await checkPlanLimit(invitation.organizationId, "members", invitation.email);
+      if (!limit.ok) return reply.status(limit.statusCode).send({ statusCode: limit.statusCode, error: limit.error, message: limit.message });
     }
 
     await prisma.$transaction([
@@ -197,10 +231,17 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
   fastify.get("/workspace", async (request) => {
     const org = await prisma.organization.findUniqueOrThrow({
       where: { id: request.organization!.id },
-      select: { id: true, name: true, slug: true, planTier: true, monthlyQuota: true, useCase: true, website: true, createdAt: true },
+      select: { id: true, name: true, slug: true, useCase: true, website: true, createdAt: true, suspendedAt: true, suspendedReason: true, sendingPausedAt: true, sendingPauseReason: true },
     });
+    const { entitlements } = await getEntitlements(org.id);
     const principal = request.principal!;
-    return { ...org, role: principal.kind === "user" ? principal.role : null };
+    return {
+      ...org,
+      plan: entitlements.planId,
+      planName: entitlements.planName,
+      monthlyQuota: entitlements.monthlyEmails,
+      role: principal.kind === "user" ? principal.role : null,
+    };
   });
 
   // PATCH /v1/workspace - Rename or update details (Owner/Admin)
@@ -344,6 +385,8 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
     if (alreadyMember) {
       return reply.status(409).send({ statusCode: 409, error: "already_member", message: "This person is already a member." });
     }
+    const limit = await checkPlanLimit(organizationId, "members", parsed.data.email);
+    if (!limit.ok) return reply.status(limit.statusCode).send({ statusCode: limit.statusCode, error: limit.error, message: limit.message });
 
     // One live invitation per address: replace any earlier one.
     await prisma.invitation.updateMany({

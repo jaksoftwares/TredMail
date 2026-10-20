@@ -72,6 +72,12 @@ class SdkTest(unittest.TestCase):
             self.client.emails.list(status=["bounced", "failed"], limit=5)
         self.assertEqual(Handler.requests[-1][0], "/v1/emails?status=bounced%2Cfailed&limit=5")
 
+    def test_usage_and_plans_paths(self):
+        for call, path in ((self.client.usage.get, "/v1/usage"), (self.client.plans.list, "/v1/plans")):
+            with self.assertRaises(TredMailError):
+                call()
+            self.assertEqual(Handler.requests[-1][0], path)
+
     def test_verify_webhook(self):
         secret = "whsec_" + base64.b64encode(b"k" * 24).decode()
         body = json.dumps({"type": "email.bounced", "data": {"email_id": "e1"}})

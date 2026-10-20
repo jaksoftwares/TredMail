@@ -7,6 +7,9 @@ import { operationsAlertTemplate } from "@tredmail/core/mail/templates";
 import { sendSystemEmail } from "@tredmail/core/services/system-mailer";
 import { enqueueEmail } from "@tredmail/core/queue/email.queue";
 import { queueWebhookDelivery } from "@tredmail/core/webhooks/dispatcher";
+import { runBillingCycle } from "@tredmail/core/billing/cycle";
+import { reconcilePendingPayments } from "@tredmail/core/billing/service";
+import { checkCircuitBreakers } from "@tredmail/core/services/circuit-breaker";
 
 /**
  * Delivery health checks, every 15 minutes, emailed to OPS_EMAIL. Each alert type is sent at
@@ -168,6 +171,12 @@ async function notify(alert: Alert) {
 export async function runHealthChecks(): Promise<Alert[]> {
   const alerts = [...(await deliveryAlerts()), ...(await blocklistAlerts())];
   for (const alert of alerts) await notify(alert);
+  // Per-workspace circuit breaker: pauses customers with high bounce or complaint rates
+  const paused = await checkCircuitBreakers().catch((err) => {
+    console.error("[monitor] circuit breaker check failed", err);
+    return [];
+  });
+  if (paused.length) console.warn(`[monitor] paused sending for ${paused.length} workspace(s): ${paused.join(", ")}`);
   return alerts;
 }
 
@@ -189,7 +198,16 @@ export async function applyRetention(now = new Date()) {
   const attachments = await prisma.emailAttachment.deleteMany({
     where: { email: { createdAt: { lt: contentCutoff }, status: { notIn: [...unsent] } } },
   });
-  const deleted = await prisma.email.deleteMany({ where: { createdAt: { lt: recordCutoff } } });
+  let deleted = await prisma.email.deleteMany({ where: { createdAt: { lt: recordCutoff } } });
+  // Each plan keeps email logs for its own number of days (Free: 7, Pro: 30, ...)
+  for (const plan of await prisma.plan.findMany({ select: { id: true, logRetentionDays: true } })) {
+    if (plan.logRetentionDays >= env.EMAIL_RECORD_RETENTION_DAYS) continue;
+    const cutoff = new Date(now.getTime() - plan.logRetentionDays * DAY_MS);
+    const removed = await prisma.email.deleteMany({
+      where: { createdAt: { lt: cutoff }, status: { notIn: [...unsent] }, organization: { subscription: { planId: plan.id } } },
+    });
+    deleted = { count: deleted.count + removed.count };
+  }
   await prisma.idempotencyKey.deleteMany({ where: { createdAt: { lt: new Date(now.getTime() - DAY_MS) } } });
   await prisma.webhookDelivery.deleteMany({ where: { createdAt: { lt: contentCutoff }, status: { not: "pending" } } });
   await prisma.dmarcReport.deleteMany({ where: { dateBegin: { lt: recordCutoff } } });
@@ -228,19 +246,26 @@ export async function sweepOutbox(now = new Date()) {
   return { emails: emails.length, webhooks: deliveries.length };
 }
 
-/** Schedules health checks, the outbox sweeper and the daily retention run (shared by all worker processes). */
+/**
+ * Schedules health checks, the outbox sweeper, the daily retention run, the billing cycle
+ * and payment reconciliation (shared by all worker processes).
+ */
 export function startMonitor() {
   const queue = new Queue(QUEUE, { connection: redisConnection });
   void Promise.all([
     queue.upsertJobScheduler("delivery-health", { every: EVERY_MS }, { name: "health-check" }),
     queue.upsertJobScheduler("outbox-sweep", { every: 60_000 }, { name: "outbox" }),
     queue.upsertJobScheduler("data-retention", { pattern: "30 2 * * *", tz: "UTC" }, { name: "retention" }),
+    queue.upsertJobScheduler("billing-cycle", { every: 10 * 60_000 }, { name: "billing" }),
+    queue.upsertJobScheduler("payments-reconcile", { every: 60_000 }, { name: "reconcile" }),
   ]).catch((err) => console.error("[monitor] could not schedule maintenance jobs", err));
   const worker = new Worker(
     QUEUE,
     async (job) => {
       if (job.name === "retention") return applyRetention();
       if (job.name === "outbox") return sweepOutbox();
+      if (job.name === "billing") return runBillingCycle();
+      if (job.name === "reconcile") return reconcilePendingPayments();
       return (await runHealthChecks()).map((a) => a.key);
     },
     { connection: redisConnection },
