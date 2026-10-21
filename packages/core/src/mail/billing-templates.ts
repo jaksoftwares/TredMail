@@ -22,7 +22,7 @@ export interface PaybillDetails {
 }
 
 const paybillRows = (paybill?: PaybillDetails | null): Array<[string, string]> =>
-  paybill ? paybill.fields.map((f): [string, string] => [`M-Pesa Paybill: ${f.label.toLowerCase()}`, f.value]) : [];
+  paybill ? paybill.fields.map((f): [string, string] => [`M-Pesa ${f.label.toLowerCase()}`, f.value]) : [];
 
 export function invoiceIssuedTemplate(p: {
   workspace: string;

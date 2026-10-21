@@ -13,7 +13,7 @@ import {
   notifyPlanChange,
   formatDay,
 } from "./notify.js";
-import { addDays, addInterval, closedWindows, remainingFraction, usageWindowAt, utcDay } from "./periods.js";
+import { addDays, addInterval, remainingFraction, usageWindowAt, utcDay } from "./periods.js";
 import { classifyChange, FREE_PLAN_ID, overageCharge, planPrice, resolveEntitlements, type PlanChange } from "./plans.js";
 import { ensureBillingAccount, ensureSubscription, type SubscriptionWithPlan } from "./subscriptions.js";
 import { usageBetween } from "./usage.js";

@@ -144,6 +144,13 @@ fi
 echo "🌱 Seeding workspaces..."
 "${COMPOSE[@]}" run --rm --no-deps api node apps/api/dist/cli/seed.js
 
+# 9. Register payment notification URLs with M-Pesa (production only; Safaricom keeps the
+#    first registration, so a failure here is reported but does not stop the deploy)
+if [ "$STAGE" = "production" ] && grep -qE '^MPESA_CONSUMER_KEY=.+' "$ENV_FILE"; then
+  echo "💳 Registering M-Pesa notification URLs..."
+  "${COMPOSE[@]}" run --rm --no-deps api node apps/api/dist/cli/payments-setup.js || echo "⚠️  M-Pesa URL registration failed; run it again later (see docs/BILLING_AND_PAYMENTS.md)"
+fi
+
 # shellcheck disable=SC1090
 source <(grep -E '^(CONSOLE|API|TRACKING)_DOMAIN=' "$ENV_FILE")
 echo ""

@@ -281,8 +281,27 @@ export class MpesaGateway implements PaymentGateway {
 
   offlineInstructions(reference: string, amount: number, currency: string): OfflineInstructions | null {
     const paybill = this.config.paybillNumber;
-    if (!paybill || currency !== "KES") return null;
+    if (currency !== "KES") return null;
     const shillings = Math.ceil(amount / 100).toLocaleString("en-US");
+    if (!paybill) {
+      const till = this.config.transactionType === "CustomerBuyGoodsOnline" ? (this.config.tillNumber ?? this.config.shortcode) : null;
+      if (!till) return null;
+      // Buy Goods carries no account number, so these payments are matched by Dovepeak staff.
+      return {
+        title: "Pay with M-Pesa Buy Goods",
+        steps: [
+          "On your phone open M-PESA, then Lipa na M-PESA, then Buy Goods and Services.",
+          `Enter till number ${till}.`,
+          `Enter the amount, KES ${shillings}, and your PIN.`,
+          `Email the M-Pesa confirmation message with invoice ${reference} to Dovepeak billing; the payment is applied within one business day.`,
+        ],
+        fields: [
+          { label: "Till number", value: till },
+          { label: "Invoice", value: reference },
+          { label: "Amount", value: `KES ${shillings}` },
+        ],
+      };
+    }
     return {
       title: "Pay with M-Pesa Paybill",
       steps: [
@@ -302,8 +321,8 @@ export class MpesaGateway implements PaymentGateway {
 
   async setup(): Promise<string[]> {
     const lines: string[] = [];
-    const shortcode = this.config.paybillNumber;
-    if (!shortcode) return ["M-Pesa: no MPESA_PAYBILL_NUMBER, so Paybill (C2B) notifications are not registered."];
+    const shortcode = this.config.paybillNumber ?? (this.config.transactionType === "CustomerBuyGoodsOnline" ? this.config.shortcode : undefined);
+    if (!shortcode) return ["M-Pesa: no Paybill or till short code, so manual payment (C2B) notifications are not registered."];
     const { status, body } = await this.post("/mpesa/c2b/v1/registerurl", {
       ShortCode: shortcode,
       ResponseType: "Completed",

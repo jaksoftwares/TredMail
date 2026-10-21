@@ -200,8 +200,35 @@ export type Env = z.infer<typeof envSchema> & {
   CORS_ORIGIN_LIST: string[];
 };
 
+/**
+ * Accepts the common Daraja variable names (MPESA_ENV, MPESA_PARTY_B, MPESA_CALLBACK_URL)
+ * alongside TredMail's, and treats empty or placeholder M-Pesa values as unset.
+ */
+function normalizeMpesa(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...source };
+  for (const key of Object.keys(out)) {
+    if (!key.startsWith("MPESA_")) continue;
+    const value = out[key]?.trim();
+    out[key] = value ? value : undefined;
+  }
+  out.MPESA_ENVIRONMENT ??= out.MPESA_ENV;
+  if (out.MPESA_PARTY_B) {
+    if (out.MPESA_TRANSACTION_TYPE === "CustomerBuyGoodsOnline") out.MPESA_TILL_NUMBER ??= out.MPESA_PARTY_B;
+    else out.MPESA_PAYBILL_NUMBER ??= out.MPESA_PARTY_B;
+  }
+  if (!out.MPESA_CALLBACK_BASE_URL && out.MPESA_CALLBACK_URL) {
+    try {
+      // Only the origin is used: TredMail builds its own callback paths under it
+      out.MPESA_CALLBACK_BASE_URL = new URL(out.MPESA_CALLBACK_URL).origin;
+    } catch {
+      // not a URL yet ("to be confirmed"): fall back to API_BASE_URL
+    }
+  }
+  return out;
+}
+
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
-  const parsed = envSchema.safeParse(source);
+  const parsed = envSchema.safeParse(normalizeMpesa(source));
   if (!parsed.success) {
     const problems = parsed.error.issues
       .map((issue) => `  - ${issue.path.join(".") || "(root)"} ${issue.message}`)

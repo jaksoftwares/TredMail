@@ -35,8 +35,7 @@
     "openapi:export": "tsx scripts/export-openapi.ts",
     "staff": "npm run staff -w @tredmail/api --",
     "payments:setup": "npm run payments:setup -w @tredmail/api",
-    "payments:simulator": "tsx scripts/daraja-simulator.ts",
-    "test:billing": "tsx scripts/billing-test.ts"
+    "payments:simulator": "tsx scripts/daraja-simulator.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

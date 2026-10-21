@@ -221,7 +221,11 @@ export function startDarajaSimulator(options: SimulatorOptions = {}): Promise<Da
       log(`Paybill KES ${amount} account ${account}: ${rejected ? "rejected by validation" : `confirmation HTTP ${confirmation?.status}`}`);
       return { transId, validation: validation?.body ?? null, confirmation: confirmation?.body ?? null };
     },
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      }),
   };
 
   return new Promise((resolve) => {
