@@ -11,11 +11,11 @@
   "dependencies": {
     "@tredmail/core": "*",
     "@tredmail/db": "*",
-    "mailparser": "3.9.36",
-    "smtp-server": "3.19.17"
+    "mailparser": "3.12.4",
+    "smtp-server": "3.21.1"
   },
   "devDependencies": {
-    "@types/mailparser": "3.4.6",
-    "@types/smtp-server": "3.5.12"
+    "@types/mailparser": "3.9.0",
+    "@types/smtp-server": "3.5.13"
   }
 }
