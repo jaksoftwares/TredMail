@@ -10,12 +10,12 @@
     "brand:assets": "node scripts/brand-assets.mjs"
   },
   "dependencies": {
-    "better-auth": "^1.7.11",
-    "lucide-react": "^1.60.0",
-    "next": "16.4.2",
+    "better-auth": "^1.7.12",
+    "lucide-react": "^1.61.0",
+    "next": "16.4.3",
     "qrcode": "^1.5.4",
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "swr": "^2.5.1"
   },
   "devDependencies": {
