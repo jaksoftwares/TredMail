@@ -26,7 +26,7 @@ interface EmailDetail {
   template: { id: string; alias: string } | null;
   attachments: { filename: string; content_type: string | null; size: number }[];
   smtp_response: string | null;
-  events: { id: string; type: string; timestamp: string; ip_address: string | null; user_agent: string | null; link_url: string | null; details: Record<string, unknown> | null }[];
+  events: { id: string; type: string; timestamp: string; ip_address: string | null; user_agent: string | null; link_url: string | null; bot?: boolean; details: Record<string, unknown> | null }[];
 }
 
 function eventDetail(e: EmailDetail["events"][number]): string | null {
@@ -156,7 +156,14 @@ function EmailDetailPageContent() {
                 <li key={e.id} className="relative pl-5">
                   <span className="absolute left-0 top-1.5 size-2 rounded-full bg-orange" aria-hidden />
                   <div className="flex items-center justify-between gap-2">
-                    <StatusBadge status={e.type} />
+                    <span className="flex items-center gap-1.5">
+                      <StatusBadge status={e.type} />
+                      {e.bot && (
+                        <span className="text-xs text-subtle" title="A security scanner or privacy prefetch, not a person. Left out of stats and webhooks.">
+                          automated
+                        </span>
+                      )}
+                    </span>
                     <span className="text-xs text-subtle">{formatDate(e.timestamp)}</span>
                   </div>
                   {detail && <p className="mt-1 break-all text-xs text-muted">{detail}</p>}

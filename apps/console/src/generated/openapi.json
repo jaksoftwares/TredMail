@@ -2528,7 +2528,7 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Custom headers. Standard and `X-TredMail-*` headers are reserved."
+            "description": "Custom headers. Standard and `X-TredMail-*` headers are reserved. `List-Unsubscribe` (`<https://...>` or `<mailto:...>` entries) and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` may be set, unless `unsubscribe` is true."
           },
           "tags": {
             "type": "array",
@@ -2574,11 +2574,15 @@
           },
           "track_opens": {
             "type": "boolean",
-            "description": "Default true."
+            "description": "Adds an invisible image. Defaults to the workspace setting (off for new workspaces)."
           },
           "track_clicks": {
             "type": "boolean",
-            "description": "Default true."
+            "description": "Sends links through TredMail's tracking address. Defaults to the workspace setting (off for new workspaces). Password-reset, verification and sign-in links, and links with a `data-tredmail-notrack` attribute, are never rewritten."
+          },
+          "unsubscribe": {
+            "type": "boolean",
+            "description": "Adds TredMail's one-click unsubscribe (`List-Unsubscribe` and `List-Unsubscribe-Post`, RFC 8058, required by Gmail and Yahoo for bulk mail). Using it suppresses the recipient and sends `email.unsubscribed`. Needs exactly one recipient."
           }
         },
         "required": [
@@ -2631,6 +2635,13 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "suppressed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Recipients left out because they are on the suppression list. The email is refused (422 `recipient_suppressed`) only when every recipient is."
           }
         },
         "required": [
@@ -2797,7 +2808,8 @@
               "opened",
               "clicked",
               "bounced",
-              "complained"
+              "complained",
+              "unsubscribed"
             ]
           },
           "timestamp": {
@@ -2821,6 +2833,10 @@
               "string",
               "null"
             ]
+          },
+          "bot": {
+            "type": "boolean",
+            "description": "An open or click by a security scanner or privacy prefetching, not a person. Not counted in stats and not sent as a webhook."
           },
           "details": {
             "type": [
@@ -3099,6 +3115,7 @@
           "email.clicked",
           "email.bounced",
           "email.complained",
+          "email.unsubscribed",
           "domain.updated"
         ]
       },

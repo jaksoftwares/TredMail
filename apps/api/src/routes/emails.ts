@@ -53,6 +53,8 @@ function accepted(result: Extract<AcceptResult, { ok: true }>) {
     status: result.email.status,
     scheduled_at: result.email.scheduledAt?.toISOString() ?? null,
     created_at: result.email.createdAt.toISOString(),
+    // Recipients left out because they are on the suppression list (the rest were accepted)
+    suppressed: result.email.suppressed,
   };
 }
 
@@ -215,6 +217,8 @@ export async function emailRoutes(fastify: FastifyInstance) {
         ip_address: e.ipAddress,
         user_agent: e.userAgent,
         link_url: e.linkUrl,
+        // Opens and clicks by scanners or privacy prefetching, left out of stats and webhooks
+        bot: e.bot,
         details: e.details,
       })),
     });

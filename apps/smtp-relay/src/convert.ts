@@ -13,6 +13,8 @@ import type { SendEmailInput } from "@tredmail/core/services/email-validation";
  *   X-TredMail-Tags: category=receipt, plan=pro
  *   X-TredMail-Track-Opens: false        X-TredMail-Track-Clicks: false
  *   X-TredMail-Scheduled-At: 2026-11-01T09:00:00Z
+ *   X-TredMail-Unsubscribe: true          (one-click unsubscribe; single-recipient messages)
+ * List-Unsubscribe and List-Unsubscribe-Post set by the application are passed through.
  */
 
 const MAX_CUSTOM_HEADERS = 30;
@@ -49,12 +51,14 @@ function parseTags(value: string | undefined): Array<{ name: string; value: stri
 
 const parseBool = (value: string | undefined) => (value === undefined ? undefined : !/^(false|0|no|off)$/i.test(value.trim()));
 
-/** Custom X- headers the caller set (TredMail's own and reserved ones are left out). */
+/** Custom X- and List-Unsubscribe headers the caller set (TredMail's own are left out). */
 function customHeaders(parsed: ParsedMail): Record<string, string> | undefined {
   const headers: Record<string, string> = {};
   for (const line of parsed.headerLines) {
     const name = line.line.slice(0, line.line.indexOf(":")).trim();
-    if (!/^x-/i.test(name) || /^x-tredmail-/i.test(name) || /^x-(mailer|originating-ip)$/i.test(name)) continue;
+    // X- headers, plus List-Unsubscribe and List-Unsubscribe-Post (checked like the API's)
+    const passThrough = /^x-/i.test(name) || /^list-unsubscribe(-post)?$/i.test(name);
+    if (!passThrough || /^x-tredmail-/i.test(name) || /^x-(mailer|originating-ip)$/i.test(name)) continue;
     if (Object.keys(headers).length >= MAX_CUSTOM_HEADERS) break;
     headers[name] = line.line.slice(line.line.indexOf(":") + 1).replace(/\r?\n[ \t]+/g, " ").trim();
   }
@@ -85,6 +89,7 @@ export function toSendRequests(parsed: ParsedMail, envelope: Envelope): SendEmai
     track_opens: parseBool(headerText(parsed, "x-tredmail-track-opens")),
     track_clicks: parseBool(headerText(parsed, "x-tredmail-track-clicks")),
     scheduled_at: headerText(parsed, "x-tredmail-scheduled-at")?.trim() || undefined,
+    unsubscribe: parseBool(headerText(parsed, "x-tredmail-unsubscribe")),
     attachments: parsed.attachments.length
       ? parsed.attachments.map((a) => ({
           filename: a.filename ?? "attachment",

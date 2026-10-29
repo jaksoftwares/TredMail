@@ -10,6 +10,8 @@ export interface TrackingSigner {
   verifyOpen(emailId: string, signature: string | undefined): boolean;
   signClick(emailId: string, url: string): string;
   verifyClick(emailId: string, url: string, signature: string | undefined): boolean;
+  signUnsubscribe(emailId: string): string;
+  verifyUnsubscribe(emailId: string, signature: string | undefined): boolean;
 }
 
 // 128-bit truncated HMAC: short enough for URLs, far beyond brute-force range.
@@ -35,5 +37,7 @@ export function createTrackingSigner(masterKeyHex: string): TrackingSigner {
     verifyOpen: (emailId, signature) => verify(`open:${emailId}`, signature),
     signClick: (emailId, url) => sign(`click:${emailId}:${url}`),
     verifyClick: (emailId, url, signature) => verify(`click:${emailId}:${url}`, signature),
+    signUnsubscribe: (emailId) => sign(`unsubscribe:${emailId}`),
+    verifyUnsubscribe: (emailId, signature) => verify(`unsubscribe:${emailId}`, signature),
   };
 }

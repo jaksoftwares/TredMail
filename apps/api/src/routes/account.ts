@@ -231,7 +231,20 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
   fastify.get("/workspace", async (request) => {
     const org = await prisma.organization.findUniqueOrThrow({
       where: { id: request.organization!.id },
-      select: { id: true, name: true, slug: true, useCase: true, website: true, createdAt: true, suspendedAt: true, suspendedReason: true, sendingPausedAt: true, sendingPauseReason: true },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        useCase: true,
+        website: true,
+        createdAt: true,
+        suspendedAt: true,
+        suspendedReason: true,
+        sendingPausedAt: true,
+        sendingPauseReason: true,
+        trackOpensDefault: true,
+        trackClicksDefault: true,
+      },
     });
     const { entitlements } = await getEntitlements(org.id);
     const principal = request.principal!;
@@ -246,11 +259,20 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
 
   // PATCH /v1/workspace - Rename or update details (Owner/Admin)
   fastify.patch("/workspace", { preHandler: requireMemberManager }, async (request, reply) => {
-    const parsed = workspaceSchema.partial().safeParse(request.body);
+    const parsed = workspaceSchema
+      .partial()
+      .extend({ track_opens_default: z.boolean().optional(), track_clicks_default: z.boolean().optional() })
+      .safeParse(request.body);
     if (!parsed.success) return reply.status(400).send(badRequest(parsed.error.issues));
     const org = await prisma.organization.update({
       where: { id: request.organization!.id },
-      data: { name: parsed.data.name, useCase: parsed.data.use_case, website: parsed.data.website },
+      data: {
+        name: parsed.data.name,
+        useCase: parsed.data.use_case,
+        website: parsed.data.website,
+        trackOpensDefault: parsed.data.track_opens_default,
+        trackClicksDefault: parsed.data.track_clicks_default,
+      },
     });
     await recordAudit({
       organizationId: org.id,

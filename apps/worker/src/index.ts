@@ -6,7 +6,9 @@ import { EMAIL_QUEUE_NAME, SYSTEM_EMAIL_QUEUE_NAME, type EmailJobData } from "@t
 import { prisma } from "@tredmail/db";
 import { decryptSecret } from "@tredmail/core/security/crypto";
 import { createTrackingSigner } from "@tredmail/core/security/tracking-signature";
-import { prepareEmailBody } from "@tredmail/core/mail/mime";
+import { prepareEmailBody, unsubscribeHeaders } from "@tredmail/core/mail/mime";
+import { withoutSuppressed } from "@tredmail/core/services/email-validation";
+import { releaseUsage } from "@tredmail/core/billing/usage";
 import { env } from "@tredmail/core/config/env";
 import { dispatchWebhookEvent } from "@tredmail/core/webhooks/dispatcher";
 import { createVerpCodec, returnPathDomainFor } from "@tredmail/core/mail/verp";
@@ -108,6 +110,8 @@ interface SentResult {
   response: string;
   accepted: string[];
   rejected: string[];
+  /** Recipients dropped at send time because they were suppressed after the email was accepted */
+  suppressed?: string[];
 }
 
 /** Records the mail server's acceptance (SENT) and announces it. */
@@ -123,7 +127,13 @@ async function markSent(email: { id: string; organizationId: string; to: string[
         data: {
           emailId: email.id,
           type: "SENT",
-          details: { route: result.route, smtpResponse: result.response, accepted: result.accepted, rejected: result.rejected },
+          details: {
+            route: result.route,
+            smtpResponse: result.response,
+            accepted: result.accepted,
+            rejected: result.rejected,
+            ...(result.suppressed?.length ? { suppressed: result.suppressed } : {}),
+          },
         },
       }),
     ]),
@@ -216,7 +226,20 @@ async function deliver(job: Job<EmailJobData>, token?: string) {
     throw new UnrecoverableError(`Cannot decrypt DKIM key for ${domain.name}: ${describe(err)}`);
   }
 
-  const route = await chooseRoute(recipients, email.priority);
+  // Recipients suppressed since the email was accepted (a bounce or complaint on another email,
+  // an unsubscribe) are dropped now; the email fails only if nobody is left.
+  const suppressedNow = await prisma.suppression.findMany({
+    where: { organizationId: email.organizationId, email: { in: recipients.map((r) => r.toLowerCase()) } },
+    select: { email: true },
+  });
+  const lists = withoutSuppressed({ to: email.to, cc: email.cc, bcc: email.bcc }, new Set(suppressedNow.map((s) => s.email.toLowerCase())));
+  const sendTo = [...lists.to, ...lists.cc, ...lists.bcc];
+  if (sendTo.length === 0) {
+    if (email.priority !== "SYSTEM") await releaseUsage(email.organizationId, recipients.length, email.createdAt).catch(() => undefined);
+    throw new UnrecoverableError(`Every recipient was added to the suppression list after this email was accepted (${lists.removed.join(", ")}).`);
+  }
+
+  const route = await chooseRoute(sendTo, email.priority);
   if (!route) {
     // Warm-up cap reached and no fallback relay: hold the message until tomorrow's allowance.
     const day = new Date().toISOString().slice(0, 10);
@@ -239,7 +262,7 @@ async function deliver(job: Job<EmailJobData>, token?: string) {
   // KumoMTA (production or staging) gets a VERP envelope so bounces map back to this email.
   // Other providers set their own return path.
   const envelope =
-    route === "fallback" ? undefined : { from: verp.encode(emailId, returnPathDomainFor(domain, env.BOUNCE_DOMAIN)), to: recipients };
+    route === "fallback" ? undefined : { from: verp.encode(emailId, returnPathDomainFor(domain, env.BOUNCE_DOMAIN)), to: sendTo };
 
   const customHeaders = ((email.metadata as { headers?: Record<string, string> } | null)?.headers ?? {}) as Record<string, string>;
   const attachments =
@@ -255,9 +278,9 @@ async function deliver(job: Job<EmailJobData>, token?: string) {
   const message: SendMailOptions = {
     envelope,
     from: email.from,
-    to: email.to,
-    cc: email.cc,
-    bcc: email.bcc,
+    to: lists.to,
+    cc: lists.cc,
+    bcc: lists.bcc,
     replyTo: email.replyTo ?? undefined,
     subject: email.subject,
     html: prepared.html,
@@ -265,6 +288,7 @@ async function deliver(job: Job<EmailJobData>, token?: string) {
     messageId,
     headers: {
       ...customHeaders,
+      ...(email.unsubscribeLink ? unsubscribeHeaders(emailId, env.TRACKING_BASE_URL, signer) : {}),
       "X-TredMail-ID": emailId,
       // Gmail's feedback loop reports complaint rates per value: category, workspace, sender
       "Feedback-ID": `${categoryOf(email.tags)}:${email.organizationId}:tredmail`,
@@ -299,6 +323,7 @@ async function deliver(job: Job<EmailJobData>, token?: string) {
     response: info.response,
     accepted: info.accepted.map(String),
     rejected: info.rejected.map(String),
+    suppressed: lists.removed,
   });
   return { messageId: info.messageId, response: info.response };
 }

@@ -43,6 +43,11 @@ model Organization {
   sendingPausedAt    DateTime?
   sendingPauseReason String?
 
+  // Open and click tracking for emails that do not say (track_opens / track_clicks). Off for
+  // new workspaces: tracking rewrites links and adds a pixel, which customers opt into.
+  trackOpensDefault  Boolean @default(false)
+  trackClicksDefault Boolean @default(false)
+
   // Relations
   members        OrganizationMember[]
   invitations    Invitation[]
@@ -301,33 +306,35 @@ enum BounceType {
 }
 
 model Email {
-  id             String        @id @default(cuid())
-  organizationId String
-  domainId       String
-  from           String
-  to             String[]
-  cc             String[]      @default([])
-  bcc            String[]      @default([])
-  replyTo        String?
-  subject        String
-  htmlBody       String?       @db.Text
-  textBody       String?       @db.Text
-  status         EmailStatus   @default(QUEUED)
-  messageId      String?       @unique // Unique RFC 5322 Message-ID
-  smtpResponse   String?       @db.Text
-  metadata       Json? // Custom developer metadata
-  tags           Json? // Categorization tags
-  trackOpens     Boolean       @default(true)
-  trackClicks    Boolean       @default(true)
-  scheduledAt    DateTime? // Send no earlier than this
-  templateId     String? // Template the email was rendered from, if any
-  priority       EmailPriority @default(NORMAL)
+  id              String        @id @default(cuid())
+  organizationId  String
+  domainId        String
+  from            String
+  to              String[]
+  cc              String[]      @default([])
+  bcc             String[]      @default([])
+  replyTo         String?
+  subject         String
+  htmlBody        String?       @db.Text
+  textBody        String?       @db.Text
+  status          EmailStatus   @default(QUEUED)
+  messageId       String?       @unique // Unique RFC 5322 Message-ID
+  smtpResponse    String?       @db.Text
+  metadata        Json? // Custom developer metadata
+  tags            Json? // Categorization tags
+  trackOpens      Boolean       @default(true)
+  trackClicks     Boolean       @default(true)
+  scheduledAt     DateTime? // Send no earlier than this
+  templateId      String? // Template the email was rendered from, if any
+  priority        EmailPriority @default(NORMAL)
   // Set just before each hand-off to the mail server, so a retry after a crash can tell
   // whether the previous attempt may have got through (see core/delivery/attempts.ts)
-  sendAttemptAt  DateTime?
-  sendRoute      String? // mta | staging | fallback
+  sendAttemptAt   DateTime?
+  sendRoute       String? // mta | staging | fallback
   // When KumoMTA reported receiving the message (its Reception log record)
-  mtaAcceptedAt  DateTime?
+  mtaAcceptedAt   DateTime?
+  // TredMail's one-click unsubscribe headers are added (unsubscribe: true)
+  unsubscribeLink Boolean       @default(false)
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -437,6 +444,7 @@ enum EmailEventType {
   CLICKED
   BOUNCED
   COMPLAINED
+  UNSUBSCRIBED // The recipient used the one-click unsubscribe link
 }
 
 model EmailEvent {
@@ -451,6 +459,9 @@ model EmailEvent {
   details    Json? // Raw diagnostic / DSN / SMTP payload
   // Identifies the source record (e.g. KumoMTA's log record) so a retried report is stored once
   dedupeKey  String?
+  // An open or click made by software (security scanners, privacy proxies), not a person:
+  // kept for the record, left out of stats and webhooks
+  bot        Boolean        @default(false)
 
   email Email @relation(fields: [emailId], references: [id], onDelete: Cascade)
 

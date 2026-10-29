@@ -22,12 +22,12 @@ export async function statsRoutes(fastify: FastifyInstance) {
     const [byStatus, uniqueOpens, uniqueClicks, recentEmails] = await Promise.all([
       prisma.email.groupBy({ by: ["status"], where: { organizationId: orgId }, _count: { _all: true } }),
       prisma.emailEvent.findMany({
-        where: { type: "OPENED", email: { organizationId: orgId } },
+        where: { type: "OPENED", bot: false, email: { organizationId: orgId } },
         distinct: ["emailId"],
         select: { emailId: true },
       }),
       prisma.emailEvent.findMany({
-        where: { type: "CLICKED", email: { organizationId: orgId } },
+        where: { type: "CLICKED", bot: false, email: { organizationId: orgId } },
         distinct: ["emailId"],
         select: { emailId: true },
       }),
@@ -71,7 +71,8 @@ export async function statsRoutes(fastify: FastifyInstance) {
   });
 
   // GET /v1/stats/timeseries?days=30&domain= - Emails per UTC day for each outcome.
-  // Opens and clicks count unique emails, so one reader opening twice counts once.
+  // Opens and clicks count unique emails, so one reader opening twice counts once, and leave
+  // out scanners and prefetchers (events flagged bot).
   fastify.get("/timeseries", async (request, reply) => {
     const parsed = timeseriesQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -91,6 +92,7 @@ export async function statsRoutes(fastify: FastifyInstance) {
       JOIN "domains" d ON d."id" = e."domainId"
       WHERE e."organizationId" = ${orgId}
         AND ev."timestamp" >= ${start}
+        AND ev."bot" = false
         AND ev."type"::text IN ('SENT', 'DELIVERED', 'DEFERRED', 'BOUNCED', 'COMPLAINED', 'FAILED', 'OPENED', 'CLICKED')
         ${domainFilter}
       GROUP BY 1, 2

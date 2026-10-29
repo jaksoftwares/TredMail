@@ -36,6 +36,9 @@ export const sendEmailSchema = z.object({
   variables: z.record(z.string(), z.unknown()).optional(),
   // ISO 8601 time, up to 30 days ahead
   scheduled_at: z.string().datetime({ offset: true }).optional(),
+  // Adds TredMail's one-click unsubscribe (List-Unsubscribe and List-Unsubscribe-Post,
+  // RFC 8058). The recipient is added to the suppression list when they use it.
+  unsubscribe: z.boolean().optional(),
 });
 
 export type SendEmailInput = z.infer<typeof sendEmailSchema>;
@@ -61,8 +64,6 @@ const RESERVED_HEADERS = new Set([
   "mime-version",
   "content-type",
   "content-transfer-encoding",
-  "list-unsubscribe",
-  "list-unsubscribe-post",
   "feedback-id",
 ]);
 
@@ -72,6 +73,46 @@ export function findReservedHeaders(headers: Record<string, string> | undefined)
     const lower = name.toLowerCase();
     return RESERVED_HEADERS.has(lower) || lower.startsWith("x-tredmail-") || /[\r\n:]/.test(name);
   });
+}
+
+const headerValue = (headers: Record<string, string> | undefined, name: string) =>
+  Object.entries(headers ?? {}).find(([key]) => key.toLowerCase() === name)?.[1];
+
+/**
+ * Checks List-Unsubscribe headers a sender sets themselves: one or more `<https://...>` or
+ * `<mailto:...>` entries, and List-Unsubscribe-Post (RFC 8058) only as `List-Unsubscribe=One-Click`
+ * next to an https entry. They cannot be combined with TredMail's own (`unsubscribe: true`).
+ * Returns what is wrong, or null.
+ */
+export function checkListUnsubscribeHeaders(headers: Record<string, string> | undefined, tredmailUnsubscribe: boolean): string | null {
+  const list = headerValue(headers, "list-unsubscribe");
+  const post = headerValue(headers, "list-unsubscribe-post");
+  if (list === undefined && post === undefined) return null;
+  if (tredmailUnsubscribe) return "Set either unsubscribe: true or your own List-Unsubscribe headers, not both.";
+  if (list === undefined) return "List-Unsubscribe-Post needs a List-Unsubscribe header.";
+  const entries = list.split(",").map((part) => part.trim());
+  const valid = entries.every((entry) => /^<(https:\/\/[^\s<>]+|mailto:[^\s<>]+)>$/i.test(entry));
+  if (!valid) return "List-Unsubscribe must be one or more <https://...> or <mailto:...> entries, separated by commas.";
+  if (post !== undefined) {
+    if (post.trim() !== "List-Unsubscribe=One-Click") return "List-Unsubscribe-Post must be exactly 'List-Unsubscribe=One-Click'.";
+    if (!entries.some((entry) => /^<https:/i.test(entry))) return "One-click unsubscribe (List-Unsubscribe-Post) needs an https:// entry in List-Unsubscribe.";
+  }
+  return null;
+}
+
+/** Removes suppressed addresses from each recipient list (case-insensitive), keeping order. */
+export function withoutSuppressed(
+  recipients: { to: string[]; cc: string[]; bcc: string[] },
+  suppressed: Set<string>,
+): { to: string[]; cc: string[]; bcc: string[]; removed: string[] } {
+  const removed: string[] = [];
+  const keep = (list: string[]) =>
+    list.filter((address) => {
+      if (!suppressed.has(address.toLowerCase())) return true;
+      removed.push(address.toLowerCase());
+      return false;
+    });
+  return { to: keep(recipients.to), cc: keep(recipients.cc), bcc: keep(recipients.bcc), removed: [...new Set(removed)] };
 }
 
 const addressSchema = z.string().email();

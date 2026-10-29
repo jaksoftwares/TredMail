@@ -22,7 +22,15 @@ export default function WebhooksDocsPage() {
           [<C key="b">email.bounced</C>, <>Rejected. <C>bounce_type</C> is <C>hard</C> (address suppressed) or <C>soft</C>; <C>category</C> says why.</>],
           [<C key="f">email.failed</C>, "Not delivered after all retries."],
           [<C key="c">email.complained</C>, "The recipient marked it as spam (address suppressed)."],
-          [<C key="o">email.opened</C>, <>And <C>email.clicked</C>, when tracking is on.</>],
+          [
+            <C key="o">email.opened</C>,
+            <>
+              And <C>email.clicked</C> (with <C>link_url</C>), when tracking is on. Only people count: security scanners and privacy prefetching are recorded
+              on the email but not sent.
+            </>,
+          ],
+          [<C key="u">email.unsubscribed</C>, <>The recipient used the one-click unsubscribe link (address suppressed).</>],
+          [<C key="dm">domain.updated</C>, <>A domain was verified, or its DNS records started (<C>degraded</C>, <C>failed</C>) or stopped failing.</>],
         ]}
       />
       <Code

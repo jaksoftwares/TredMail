@@ -19,8 +19,15 @@ export default function SendingPage() {
           [<C key="h">html</C>, <>The HTML body. Send <C>text</C> too: some mail apps and spam filters prefer a plain-text version.</>],
           [<C key="r">reply_to</C>, "Where replies go."],
           [<C key="tg">tags</C>, <>Up to 50 <C>{"{ name, value }"}</C> pairs for filtering. A <C>category</C> tag groups Gmail Postmaster statistics.</>],
-          [<C key="hd">headers</C>, <>Custom headers such as <C>X-Order-Id</C>. Standard headers and <C>X-TredMail-*</C> are reserved.</>],
-          [<C key="tr">track_opens</C>, <>And <C>track_clicks</C>. On by default. Turn them off for security emails such as password resets.</>],
+          [<C key="hd">headers</C>, <>Custom headers such as <C>X-Order-Id</C>. Standard headers and <C>X-TredMail-*</C> are reserved; <C>List-Unsubscribe</C> is allowed (see below).</>],
+          [
+            <C key="tr">track_opens</C>,
+            <>
+              And <C>track_clicks</C>. When omitted, the workspace setting applies (Settings; off for new workspaces). Click tracking never rewrites password-reset,
+              verification or sign-in links, nor links with a <C>data-tredmail-notrack</C> attribute.
+            </>,
+          ],
+          [<C key="un">unsubscribe</C>, <>Adds one-click unsubscribe. Needs exactly one recipient. See below.</>],
           [<C key="sa">scheduled_at</C>, "An ISO 8601 time up to 30 days ahead."],
           [<C key="tp">template</C>, <>A template id or alias, with <C>variables</C>. See <Link href="/docs/templates" className="underline">templates</Link>.</>],
         ]}
@@ -80,6 +87,23 @@ export default function SendingPage() {
         Reference an inline image in the HTML as <C>{'<img src="cid:logo">'}</C>. Up to 20 files; the whole request may be at most 10 MB.
       </P>
 
+      <H2>Suppressed recipients</H2>
+      <P>
+        Addresses that bounced, complained or unsubscribed are on the workspace&apos;s suppression list. They are left out of the email and listed in the response&apos;s{" "}
+        <C>suppressed</C> array; the rest are sent to. The request fails with <C>recipient_suppressed</C> only when every recipient is suppressed.
+      </P>
+
+      <H2>One-click unsubscribe</H2>
+      <P>
+        Gmail and Yahoo require bulk and marketing mail to offer one-click unsubscribe (RFC 8058). Send <C>{'"unsubscribe": true'}</C> and TredMail adds the{" "}
+        <C>List-Unsubscribe</C> and <C>List-Unsubscribe-Post</C> headers. When the recipient uses it, the address is suppressed for your workspace and you get an{" "}
+        <C>email.unsubscribed</C> webhook. Over SMTP, add the header <C>X-TredMail-Unsubscribe: true</C>.
+      </P>
+      <P>
+        To handle unsubscribes yourself, set your own <C>List-Unsubscribe</C> (<C>{"<https://...>"}</C> and/or <C>{"<mailto:...>"}</C>) and, for one click,{" "}
+        <C>List-Unsubscribe-Post: List-Unsubscribe=One-Click</C> in <C>headers</C>.
+      </P>
+
       <H2>Errors</H2>
       <P>Every error has the same shape. Branch on <C>error</C>, which is stable; <C>message</C> is for people.</P>
       <Code
@@ -94,7 +118,7 @@ export default function SendingPage() {
         head={["Code", "Meaning"]}
         rows={[
           [<C key="1">domain_not_verified</C>, "Publish the domain's DNS records and verify it."],
-          [<C key="2">recipient_suppressed</C>, "The address bounced or complained before. Remove it from Suppressions only if you know it works again."],
+          [<C key="2">recipient_suppressed</C>, "Every recipient bounced, complained or unsubscribed before. Remove an address from Suppressions only if you know it works again."],
           [<C key="3">missing_template_variables</C>, "The template uses variables the request did not provide."],
           [<C key="4">insufficient_scope</C>, "The API key lacks the permission for this call."],
           [<C key="5">rate_limit_exceeded</C>, "Too many requests (429). Retry after a short wait."],

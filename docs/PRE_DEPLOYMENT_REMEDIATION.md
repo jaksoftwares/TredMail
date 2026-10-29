@@ -464,10 +464,10 @@ All of the following must hold on staging, then be repeated on production before
 - [x] L2 CSP
 
 **Phase 5:**
-- [ ] M4 per-recipient suppression
-- [ ] H7 tracking defaults and bots
-- [ ] B1 open/click webhooks
-- [ ] B6 one-click unsubscribe
+- [x] M4 per-recipient suppression
+- [x] H7 tracking defaults and bots
+- [x] B1 open/click webhooks
+- [x] B6 one-click unsubscribe
 
 **Phase 6:**
 - [ ] M1 relay validation
@@ -630,3 +630,42 @@ Verified on a development machine: 30 invalid keys answered 401, the next 429 wi
 served the policy on the sign-in, docs, API reference and overview pages with no external
 scripts or stylesheets. Still to check on staging in a browser: no CSP violations in the
 console (console open with the developer tools), including Google sign-in and the previews.
+
+### Phase 5 (29 October 2026)
+
+Migration `20261029030000_sending_compliance`.
+
+- **M4.** `acceptEmail` drops suppressed recipients and lists them in the response
+  (`suppressed`, also in the OpenAPI spec and Node SDK); `recipient_suppressed` only when every
+  recipient is suppressed. The worker re-checks suppressions just before sending, drops anyone
+  suppressed since acceptance (recorded on the SENT event) and fails the email, releasing its
+  plan usage, only if nobody is left.
+- **H7.** New workspaces have open and click tracking off (`trackOpensDefault` /
+  `trackClicksDefault`, set in console Settings and `PATCH /v1/workspace`); workspaces that
+  existed before the migration keep it on, as before. Click tracking never rewrites
+  account-security links (reset, verify, magic sign-in, invitations, unsubscribe...) or links
+  marked `data-tredmail-notrack`. `mail/engagement.ts` flags opens and clicks by scanners,
+  previewers, Apple's privacy prefetch and clicks within 10 seconds of the hand-off
+  (`email_events.bot`); they stay on the timeline (labelled "automated" in the console) and are
+  left out of stats and webhooks. Gmail's and Yahoo's image proxies count as people.
+- **B1.** `email.opened` and `email.clicked` (with `link_url`) are sent for people; repeat
+  opens from the same address within a minute send one webhook.
+- **B6.** Senders may set their own `List-Unsubscribe` / `List-Unsubscribe-Post` (format
+  checked). `unsubscribe: true` (SMTP: `X-TredMail-Unsubscribe: true`) adds TredMail's signed
+  one-click headers; it needs exactly one recipient, since the header is the same for every
+  recipient. `GET /v1/track/unsubscribe/:id` only shows a confirmation page (scanners follow
+  links); the POST, from the mail client or the page's button, suppresses the recipient
+  (`UNSUBSCRIBE`, an existing bounce or complaint suppression is kept), records an
+  `UNSUBSCRIBED` event once and sends the new `email.unsubscribed` webhook. Docs: sending and
+  webhooks pages.
+- Also: an invalid `scheduled_at` (possible through the SMTP relay header) is now a 422 instead
+  of a database error and endless retries (part of M1, phase 6).
+
+Verified end to end on a development machine (API, worker, KumoMTA, Mailpit, a local webhook
+receiver): a send to one suppressed and one valid recipient went to the valid one and listed
+the other; an all-suppressed send got 422; a newsletter carried both unsubscribe headers and
+left its password-reset link untouched; a scanner click and an Apple prefetch open were flagged
+and sent no webhook, while a person's click and open each sent one; GET on the unsubscribe URL
+changed nothing, POST suppressed the reader once (a second POST sent no second webhook) and the
+next email to them was refused; a recipient suppressed after a scheduled email was accepted was
+dropped at send time while the other recipient received it.

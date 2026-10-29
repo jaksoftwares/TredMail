@@ -3,7 +3,14 @@ import { enqueueEmail, removeQueuedEmail } from "../queue/email.queue.js";
 import { renderTemplate } from "../mail/template-engine.js";
 import { releaseUsage, reserveUsage } from "../billing/usage.js";
 import { env, PLATFORM_ORG_SLUG } from "../config/env.js";
-import { findReservedHeaders, MAX_SCHEDULE_DAYS, parseFromAddress, type SendEmailInput } from "./email-validation.js";
+import {
+  checkListUnsubscribeHeaders,
+  findReservedHeaders,
+  MAX_SCHEDULE_DAYS,
+  parseFromAddress,
+  withoutSuppressed,
+  type SendEmailInput,
+} from "./email-validation.js";
 
 export { sendEmailSchema } from "./email-validation.js";
 
@@ -110,7 +117,16 @@ async function resolveSendingDomain(
 export type AcceptResult =
   | {
       ok: true;
-      email: { id: string; from: string; to: string[]; status: "queued" | "scheduled"; scheduledAt: Date | null; createdAt: Date };
+      email: {
+        id: string;
+        from: string;
+        to: string[];
+        status: "queued" | "scheduled";
+        scheduledAt: Date | null;
+        createdAt: Date;
+        /** Recipients left out because they are on the workspace's suppression list */
+        suppressed: string[];
+      };
     }
   | Failure;
 
@@ -161,6 +177,7 @@ async function resolveContent(organizationId: string, payload: SendEmailInput): 
 function parseSchedule(value: string | undefined): { ok: true; at: Date | null } | Failure {
   if (!value) return { ok: true, at: null };
   const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return fail(422, "invalid_scheduled_at", `scheduled_at must be an ISO 8601 time, got '${value}'.`);
   const now = Date.now();
   if (at.getTime() <= now + 5_000) return { ok: true, at: null }; // now or in the past: send immediately
   if (at.getTime() > now + MAX_SCHEDULE_DAYS * 86_400_000) {
@@ -169,11 +186,6 @@ function parseSchedule(value: string | undefined): { ok: true; at: Date | null }
   return { ok: true, at };
 }
 
-/**
- * Validates sender domain and suppressions, records the email (with its attachments) and
- * queues it for delivery, now or at scheduled_at. Shared by the API, batch sends and the
- * SMTP relay so every path applies the same rules.
- */
 export interface AcceptOptions {
   /**
    * SYSTEM: TredMail's own mail (system-mailer.ts). It goes to the system queue, skips the
@@ -182,6 +194,14 @@ export interface AcceptOptions {
   priority?: "NORMAL" | "SYSTEM";
 }
 
+/**
+ * Validates sender domain and suppressions, records the email (with its attachments) and
+ * queues it for delivery, now or at scheduled_at. Shared by the API, batch sends and the
+ * SMTP relay so every path applies the same rules.
+ *
+ * Suppressed recipients are removed and listed in the result (`suppressed`); the email is
+ * refused only when no recipient is left.
+ */
 export async function acceptEmail(organizationId: string, payload: SendEmailInput, options: AcceptOptions = {}): Promise<AcceptResult> {
   const priority = options.priority ?? "NORMAL";
   const content = await resolveContent(organizationId, payload);
@@ -194,6 +214,8 @@ export async function acceptEmail(organizationId: string, payload: SendEmailInpu
   if (reserved.length > 0) {
     return fail(422, "reserved_header", `These headers are set by TredMail and cannot be overridden: ${reserved.join(", ")}.`);
   }
+  const headerProblem = checkListUnsubscribeHeaders(payload.headers, payload.unsubscribe === true);
+  if (headerProblem) return fail(422, "invalid_unsubscribe_header", headerProblem);
 
   const sender = parseFromAddress(content.from);
   if (!sender) return fail(422, "invalid_from", `Invalid 'from' address: '${content.from}'.`);
@@ -201,25 +223,33 @@ export async function acceptEmail(organizationId: string, payload: SendEmailInpu
   const schedule = parseSchedule(payload.scheduled_at);
   if (!schedule.ok) return schedule;
 
-  const to = toList(payload.to);
-  const cc = toList(payload.cc);
-  const bcc = toList(payload.bcc);
+  const requested = { to: toList(payload.to), cc: toList(payload.cc), bcc: toList(payload.bcc) };
+  const requestedAll = [...requested.to, ...requested.cc, ...requested.bcc].map((address) => address.toLowerCase());
+
+  const suppressedRows = await prisma.suppression.findMany({
+    where: { organizationId, email: { in: requestedAll } },
+    select: { email: true, reason: true },
+  });
+  const { to, cc, bcc, removed } = withoutSuppressed(requested, new Set(suppressedRows.map((r) => r.email.toLowerCase())));
   const allRecipients = [...to, ...cc, ...bcc].map((address) => address.toLowerCase());
+  if (allRecipients.length === 0) {
+    const first = suppressedRows[0];
+    return fail(
+      422,
+      "recipient_suppressed",
+      requestedAll.length === 1
+        ? `Recipient '${first.email}' is suppressed (${first.reason}). Delivery was blocked to protect your sender reputation.`
+        : `All ${requestedAll.length} recipients are suppressed (for example '${first.email}': ${first.reason}). Nothing was sent.`,
+    );
+  }
+  // A one-click unsubscribe link must identify one person: the header is the same for every recipient
+  if (payload.unsubscribe && allRecipients.length !== 1) {
+    return fail(422, "unsubscribe_needs_single_recipient", "unsubscribe: true needs exactly one recipient. Send one email per recipient.");
+  }
 
   const resolved = await resolveSendingDomain(organizationId, sender, allRecipients);
   if (!resolved.ok) return resolved;
   const { domain } = resolved;
-
-  const suppressed = await prisma.suppression.findFirst({
-    where: { organizationId, email: { in: allRecipients } },
-  });
-  if (suppressed) {
-    return fail(
-      422,
-      "recipient_suppressed",
-      `Recipient '${suppressed.email}' is suppressed (${suppressed.reason}). Delivery was blocked to protect your sender reputation.`,
-    );
-  }
 
   const standing = await sendingStanding(organizationId);
   if (!standing.ok) return standing;
@@ -236,37 +266,42 @@ export async function acceptEmail(organizationId: string, payload: SendEmailInpu
   const scheduledAt = schedule.at;
   const email = await prisma
     .$transaction(async (tx) => {
-    const created = await tx.email.create({
-      data: {
-        organizationId,
-        domainId: domain.id,
-        from: content.from!,
-        to,
-        cc,
-        bcc,
-        replyTo: content.replyTo,
-        subject: content.subject!,
-        htmlBody: content.html,
-        textBody: content.text,
-        status: scheduledAt ? "SCHEDULED" : "QUEUED",
-        scheduledAt,
-        templateId: content.templateId,
-        priority,
-        trackOpens: payload.track_opens ?? true,
-        trackClicks: payload.track_clicks ?? true,
-        metadata: payload.headers ? { headers: payload.headers } : undefined,
-        tags: payload.tags,
-        attachments: attachments.length ? { create: attachments } : undefined,
-      },
-    });
-    await tx.emailEvent.create({
-      data: {
-        emailId: created.id,
-        type: scheduledAt ? "SCHEDULED" : "QUEUED",
-        details: scheduledAt ? { scheduledAt: scheduledAt.toISOString() } : undefined,
-      },
-    });
-    return created;
+      const created = await tx.email.create({
+        data: {
+          organizationId,
+          domainId: domain.id,
+          from: content.from!,
+          to,
+          cc,
+          bcc,
+          replyTo: content.replyTo,
+          subject: content.subject!,
+          htmlBody: content.html,
+          textBody: content.text,
+          status: scheduledAt ? "SCHEDULED" : "QUEUED",
+          scheduledAt,
+          templateId: content.templateId,
+          priority,
+          // Tracking is off unless the request or the workspace's defaults turn it on
+          trackOpens: payload.track_opens ?? standing.trackOpensDefault,
+          trackClicks: payload.track_clicks ?? standing.trackClicksDefault,
+          unsubscribeLink: payload.unsubscribe === true,
+          metadata: payload.headers ? { headers: payload.headers } : undefined,
+          tags: payload.tags,
+          attachments: attachments.length ? { create: attachments } : undefined,
+        },
+      });
+      await tx.emailEvent.create({
+        data: {
+          emailId: created.id,
+          type: scheduledAt ? "SCHEDULED" : "QUEUED",
+          details: {
+            ...(scheduledAt ? { scheduledAt: scheduledAt.toISOString() } : {}),
+            ...(removed.length ? { suppressed: removed } : {}),
+          },
+        },
+      });
+      return created;
     })
     .catch(async (err) => {
       if (usage) await releaseUsage(organizationId, allRecipients.length, usage.day);
@@ -290,15 +325,19 @@ export async function acceptEmail(organizationId: string, payload: SendEmailInpu
       status: scheduledAt ? "scheduled" : "queued",
       scheduledAt: email.scheduledAt,
       createdAt: email.createdAt,
+      suppressed: removed,
     },
   };
 }
 
-/** Suspended workspaces (staff action) and paused ones (circuit breaker) cannot send. */
-async function sendingStanding(organizationId: string): Promise<{ ok: true } | Failure> {
+/**
+ * Suspended workspaces (staff action) and paused ones (circuit breaker) cannot send. Also
+ * returns the workspace's tracking defaults.
+ */
+async function sendingStanding(organizationId: string): Promise<{ ok: true; trackOpensDefault: boolean; trackClicksDefault: boolean } | Failure> {
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
-    select: { suspendedAt: true, sendingPausedAt: true, sendingPauseReason: true },
+    select: { suspendedAt: true, sendingPausedAt: true, sendingPauseReason: true, trackOpensDefault: true, trackClicksDefault: true },
   });
   if (org?.suspendedAt) {
     return fail(403, "workspace_suspended", "This workspace is suspended. Contact Dovepeak Technologies support.");
@@ -306,7 +345,7 @@ async function sendingStanding(organizationId: string): Promise<{ ok: true } | F
   if (org?.sendingPausedAt) {
     return fail(403, "sending_paused", `Sending is paused for this workspace: ${org.sendingPauseReason ?? "unusual bounce or complaint rates"}. Contact support to resume.`);
   }
-  return { ok: true };
+  return { ok: true, trackOpensDefault: org?.trackOpensDefault ?? false, trackClicksDefault: org?.trackClicksDefault ?? false };
 }
 
 /** Cancels a scheduled email. Once an email is being sent it can no longer be canceled. */

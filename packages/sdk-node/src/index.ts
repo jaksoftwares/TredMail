@@ -68,8 +68,12 @@ export interface SendEmailOptions {
   headers?: Record<string, string>;
   tags?: Array<{ name: string; value: string }>;
   attachments?: Attachment[];
+  /** Defaults to the workspace setting (off for new workspaces). */
   trackOpens?: boolean;
+  /** Defaults to the workspace setting. Security links are never rewritten. */
   trackClicks?: boolean;
+  /** One-click unsubscribe (RFC 8058) for single-recipient emails; suppresses whoever uses it. */
+  unsubscribe?: boolean;
 }
 
 export type EmailStatus = "scheduled" | "canceled" | "queued" | "sending" | "sent" | "delivered" | "failed" | "bounced" | "complained";
@@ -81,6 +85,8 @@ export interface EmailAccepted {
   status: "queued" | "scheduled";
   scheduled_at: string | null;
   created_at: string;
+  /** Recipients left out because they are on the suppression list */
+  suppressed: string[];
 }
 
 export interface EmailSummary {
@@ -275,6 +281,7 @@ export function toSendRequest(options: SendEmailOptions) {
     })),
     track_opens: options.trackOpens,
     track_clicks: options.trackClicks,
+    unsubscribe: options.unsubscribe,
   };
 }
 

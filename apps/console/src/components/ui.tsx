@@ -118,6 +118,7 @@ const statusTones: Record<string, Tone> = {
   failed: "danger",
   bounced: "danger",
   complained: "danger",
+  unsubscribed: "neutral",
   suspended: "danger",
   open: "warning",
   paid: "success",

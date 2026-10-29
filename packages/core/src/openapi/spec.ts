@@ -402,17 +402,35 @@ export const openApiSpec = {
           template: str("Template id or alias. Request fields override the template's."),
           variables: { type: "object", additionalProperties: true, description: "Values for the template's {{variables}}." },
           scheduled_at: dateTime("Send at this time (up to 30 days ahead). Omit to send now."),
-          headers: { type: "object", additionalProperties: str(), description: "Custom headers. Standard and `X-TredMail-*` headers are reserved." },
+          headers: {
+            type: "object",
+            additionalProperties: str(),
+            description:
+              "Custom headers. Standard and `X-TredMail-*` headers are reserved. `List-Unsubscribe` (`<https://...>` or `<mailto:...>` entries) and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` may be set, unless `unsubscribe` is true.",
+          },
           tags: arr(obj({ name: str(), value: str() }, ["name", "value"]), "Up to 50. A `category` tag groups Gmail Postmaster statistics."),
           attachments: arr(obj({ filename: str(), content: str("Base64"), content_type: str() }, ["filename", "content"]), "Up to 20; total request size 10 MB."),
-          track_opens: bool("Default true."),
-          track_clicks: bool("Default true."),
+          track_opens: bool("Adds an invisible image. Defaults to the workspace setting (off for new workspaces)."),
+          track_clicks: bool(
+            "Sends links through TredMail's tracking address. Defaults to the workspace setting (off for new workspaces). Password-reset, verification and sign-in links, and links with a `data-tredmail-notrack` attribute, are never rewritten.",
+          ),
+          unsubscribe: bool(
+            "Adds TredMail's one-click unsubscribe (`List-Unsubscribe` and `List-Unsubscribe-Post`, RFC 8058, required by Gmail and Yahoo for bulk mail). Using it suppresses the recipient and sends `email.unsubscribed`. Needs exactly one recipient.",
+          ),
         },
         ["to"],
       ),
       EmailStatus: str(undefined, { enum: ["scheduled", "canceled", "queued", "sending", "sent", "delivered", "failed", "bounced", "complained"] }),
       EmailAccepted: obj(
-        { id: str(), from: str(), to: arr(str()), status: str(undefined, { enum: ["queued", "scheduled"] }), scheduled_at: nullable(dateTime()), created_at: dateTime() },
+        {
+          id: str(),
+          from: str(),
+          to: arr(str()),
+          status: str(undefined, { enum: ["queued", "scheduled"] }),
+          scheduled_at: nullable(dateTime()),
+          created_at: dateTime(),
+          suppressed: arr(str(), "Recipients left out because they are on the suppression list. The email is refused (422 `recipient_suppressed`) only when every recipient is."),
+        },
         ["id", "status"],
       ),
       EmailSummary: obj({
@@ -445,11 +463,12 @@ export const openApiSpec = {
       },
       EmailEvent: obj({
         id: str(),
-        type: str(undefined, { enum: ["scheduled", "canceled", "queued", "sent", "deferred", "failed", "delivered", "opened", "clicked", "bounced", "complained"] }),
+        type: str(undefined, { enum: ["scheduled", "canceled", "queued", "sent", "deferred", "failed", "delivered", "opened", "clicked", "bounced", "complained", "unsubscribed"] }),
         timestamp: dateTime(),
         ip_address: nullable(str()),
         user_agent: nullable(str()),
         link_url: nullable(str()),
+        bot: bool("An open or click by a security scanner or privacy prefetching, not a person. Not counted in stats and not sent as a webhook."),
         details: { type: ["object", "null"], description: "Recipient, server response, bounce category and similar." },
       }),
       TemplateInput: obj(

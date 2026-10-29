@@ -27,8 +27,9 @@ const EVENTS: { value: string; help: string }[] = [
   { value: "email.failed", help: "Not delivered after 72 hours of retries" },
   { value: "email.bounced", help: "Rejected by the recipient's server" },
   { value: "email.complained", help: "Marked as spam by the recipient" },
-  { value: "email.opened", help: "" },
-  { value: "email.clicked", help: "" },
+  { value: "email.opened", help: "Opened by a person (scanners and privacy prefetching are left out)" },
+  { value: "email.clicked", help: "A tracked link was clicked by a person" },
+  { value: "email.unsubscribed", help: "The recipient used the one-click unsubscribe link" },
   { value: "domain.updated", help: "A domain was verified, or its DNS records started or stopped failing" },
 ];
 

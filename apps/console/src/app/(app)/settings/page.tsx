@@ -15,6 +15,8 @@ interface WorkspaceDetail {
   monthlyQuota: number;
   useCase: string | null;
   website: string | null;
+  trackOpensDefault: boolean;
+  trackClicksDefault: boolean;
 }
 
 export default function GeneralSettingsPage() {
@@ -23,6 +25,8 @@ export default function GeneralSettingsPage() {
   const [name, setName] = useState("");
   const [useCase, setUseCase] = useState("");
   const [website, setWebsite] = useState("");
+  const [trackOpens, setTrackOpens] = useState(false);
+  const [trackClicks, setTrackClicks] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -31,6 +35,8 @@ export default function GeneralSettingsPage() {
     setName(data.name);
     setUseCase(data.useCase ?? "");
     setWebsite(data.website ?? "");
+    setTrackOpens(data.trackOpensDefault);
+    setTrackClicks(data.trackClicksDefault);
   }, [data]);
 
   if (!data) return <Spinner />;
@@ -40,7 +46,10 @@ export default function GeneralSettingsPage() {
     setSaving(true);
     setResult(null);
     try {
-      await api("/v1/workspace", { method: "PATCH", body: { name, use_case: useCase || undefined, website: website || undefined } });
+      await api("/v1/workspace", {
+        method: "PATCH",
+        body: { name, use_case: useCase || undefined, website: website || undefined, track_opens_default: trackOpens, track_clicks_default: trackClicks },
+      });
       await Promise.all([mutate(), refreshMe()]);
       setResult({ ok: true, message: "Saved." });
     } catch (err) {
@@ -65,6 +74,21 @@ export default function GeneralSettingsPage() {
           <Field label="Website">
             <Input type="url" disabled={!can.manageMembers} value={website} onChange={(e) => setWebsite(e.target.value)} />
           </Field>
+          <fieldset className="space-y-2">
+            <legend className="mb-1 text-sm font-semibold">Tracking</legend>
+            <p className="text-sm text-muted">
+              Used when an email does not set <span className="font-mono">track_opens</span> or <span className="font-mono">track_clicks</span>. Click
+              tracking never rewrites password-reset, verification or sign-in links.
+            </p>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" className="size-4 accent-orange" disabled={!can.manageMembers} checked={trackOpens} onChange={(e) => setTrackOpens(e.target.checked)} />
+              Track opens (adds an invisible image)
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" className="size-4 accent-orange" disabled={!can.manageMembers} checked={trackClicks} onChange={(e) => setTrackClicks(e.target.checked)} />
+              Track clicks (links go through TredMail&apos;s tracking address)
+            </label>
+          </fieldset>
           {can.manageMembers && <Button type="submit" loading={saving}>Save changes</Button>}
         </form>
       </Card>

@@ -89,3 +89,30 @@ describe("SMTP message conversion", () => {
     expect(request.attachments).toEqual([{ filename: "logo.png", content: png, content_type: "image/png", content_id: "logo@dovepeak" }]);
   });
 });
+
+describe("SMTP unsubscribe options", () => {
+  it("passes List-Unsubscribe through and reads X-TredMail-Unsubscribe", async () => {
+    const parsed = await simpleParser(
+      crlf([
+        "From: news@dovepeakdigital.com",
+        "To: reader@example.com",
+        "Subject: News",
+        "List-Unsubscribe: <https://dovepeakdigital.com/u/123>, <mailto:unsub@dovepeakdigital.com>",
+        "List-Unsubscribe-Post: List-Unsubscribe=One-Click",
+        "",
+        "Hello",
+      ]),
+    );
+    const [request] = toSendRequests(parsed, { mailFrom: "news@dovepeakdigital.com", rcptTo: ["reader@example.com"] });
+    expect(request.headers).toEqual({
+      "List-Unsubscribe": "<https://dovepeakdigital.com/u/123>, <mailto:unsub@dovepeakdigital.com>",
+      "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+    });
+    expect(request.unsubscribe).toBeUndefined();
+
+    const withTredmail = await simpleParser(crlf(["From: news@dovepeakdigital.com", "To: reader@example.com", "Subject: News", "X-TredMail-Unsubscribe: true", "", "Hello"]));
+    const [second] = toSendRequests(withTredmail, { mailFrom: "news@dovepeakdigital.com", rcptTo: ["reader@example.com"] });
+    expect(second.unsubscribe).toBe(true);
+    expect(second.headers).toBeUndefined();
+  });
+});
