@@ -73,7 +73,7 @@ export async function sendBatch(request: FastifyRequest, reply: FastifyReply) {
   return withIdempotency(request, reply, async () => {
     const parseResult = batchSchema.safeParse(request.body);
     if (!parseResult.success) {
-      return validationError("Expected an array of 1 to 100 email objects.", parseResult.error.errors);
+      return validationError("Expected an array of 1 to 100 email objects.", parseResult.error.issues);
     }
     const orgId = request.organization!.id;
     const data = [];
@@ -119,7 +119,7 @@ export async function emailRoutes(fastify: FastifyInstance) {
   fastify.post("/", { preHandler: requireScope("emails:send") }, async (request, reply) =>
     withIdempotency(request, reply, async () => {
       const parseResult = sendEmailSchema.safeParse(request.body);
-      if (!parseResult.success) return validationError("Invalid email payload.", parseResult.error.errors);
+      if (!parseResult.success) return validationError("Invalid email payload.", parseResult.error.issues);
       const result = await acceptEmail(request.organization!.id, parseResult.data);
       if (!result.ok) return failure(result);
       await announce(request.organization!.id, result);
@@ -134,7 +134,7 @@ export async function emailRoutes(fastify: FastifyInstance) {
   fastify.get("/", { preHandler: requireScope("emails:read") }, async (request, reply) => {
     const parsed = listQuerySchema.safeParse(request.query);
     if (!parsed.success) {
-      const result = validationError("Invalid list parameters.", parsed.error.errors);
+      const result = validationError("Invalid list parameters.", parsed.error.issues);
       return reply.status(result.statusCode).send(result.body);
     }
     const { status, q, domain, tag, template, after, before, limit, cursor } = parsed.data;
@@ -233,7 +233,7 @@ export async function emailRoutes(fastify: FastifyInstance) {
   fastify.patch<{ Params: { id: string } }>("/:id", { preHandler: requireScope("emails:send") }, async (request, reply) => {
     const parsed = rescheduleSchema.safeParse(request.body);
     if (!parsed.success) {
-      const result = validationError("Send { \"scheduled_at\": \"<ISO 8601 time>\" }.", parsed.error.errors);
+      const result = validationError("Send { \"scheduled_at\": \"<ISO 8601 time>\" }.", parsed.error.issues);
       return reply.status(result.statusCode).send(result.body);
     }
     const result = await rescheduleEmail(request.organization!.id, request.params.id, parsed.data.scheduled_at);

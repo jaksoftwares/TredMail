@@ -38,6 +38,8 @@ x-backend-env: &backend-env
   FALLBACK_SMTP_SECURE: ${FALLBACK_SMTP_SECURE:-false}
   FALLBACK_SMTP_USER: ${FALLBACK_SMTP_USER:-}
   FALLBACK_SMTP_PASS: ${FALLBACK_SMTP_PASS:-}
+  # Automatic domain verification and daily DNS re-checks (on unless set to false)
+  DOMAIN_AUTO_CHECKS: ${DOMAIN_AUTO_CHECKS:-}
   EMAIL_CONTENT_RETENTION_DAYS: ${EMAIL_CONTENT_RETENTION_DAYS:-30}
   EMAIL_RECORD_RETENTION_DAYS: ${EMAIL_RECORD_RETENTION_DAYS:-395}
   # Staging only: addresses (or @domains) that are delivered for real instead of to Mailpit

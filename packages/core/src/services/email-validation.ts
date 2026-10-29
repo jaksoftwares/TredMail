@@ -15,7 +15,7 @@ export const sendEmailSchema = z.object({
   subject: z.string().min(1).max(998).optional(),
   html: z.string().optional(),
   text: z.string().optional(),
-  headers: z.record(z.string()).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
   tags: z.array(z.object({ name: z.string().max(256), value: z.string().max(256) })).max(50).optional(),
   attachments: z
     .array(
@@ -33,7 +33,7 @@ export const sendEmailSchema = z.object({
   track_clicks: z.boolean().optional(),
   // Template id or alias; its subject, html and text are rendered with `variables`
   template: z.string().min(1).max(128).optional(),
-  variables: z.record(z.unknown()).optional(),
+  variables: z.record(z.string(), z.unknown()).optional(),
   // ISO 8601 time, up to 30 days ahead
   scheduled_at: z.string().datetime({ offset: true }).optional(),
 });

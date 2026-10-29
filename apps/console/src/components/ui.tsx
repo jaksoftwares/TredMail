@@ -110,6 +110,7 @@ const statusTones: Record<string, Tone> = {
   sent: "success",
   delivered: "success",
   verified: "success",
+  degraded: "warning",
   opened: "success",
   clicked: "success",
   pending: "warning",

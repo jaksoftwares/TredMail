@@ -155,3 +155,49 @@ export function operationsAlertTemplate(params: { title: string; summary: string
     text: `${params.title}\n\n${params.summary}\n\n${params.details.join("\n")}`,
   };
 }
+
+const DOMAIN_NOTICES = {
+  verified: {
+    subject: (d: string) => `${d} is verified`,
+    heading: "Your domain is verified",
+    lead: (d: string) => `TredMail found the DNS records for ${d}. You can now send email from any address at ${d}.`,
+  },
+  recovered: {
+    subject: (d: string) => `${d} is verified again`,
+    heading: "Your domain's DNS records are back",
+    lead: (d: string) => `The DNS records for ${d} pass verification again. Nothing else is needed.`,
+  },
+  degraded: {
+    subject: (d: string) => `Action needed: DNS records for ${d} are failing`,
+    heading: "Your domain's DNS records are failing",
+    lead: (d: string) =>
+      `TredMail's daily check of ${d} found problems. Email from ${d} is still being sent, but receiving servers may reject or filter it. Fix the records within 72 hours, or sending from ${d} will stop.`,
+  },
+  failed: {
+    subject: (d: string) => `Sending from ${d} has stopped`,
+    heading: "Sending from your domain has stopped",
+    lead: (d: string) =>
+      `The DNS records for ${d} have failed verification for 72 hours, so TredMail has stopped sending from it. Queued email is held for up to 72 hours; it is sent as soon as the records pass again.`,
+  },
+} as const;
+
+export function domainStatusTemplate(params: {
+  domain: string;
+  change: keyof typeof DOMAIN_NOTICES;
+  problems: string[];
+  url: string;
+}): RenderedEmail {
+  const notice = DOMAIN_NOTICES[params.change];
+  const lead = notice.lead(params.domain);
+  const problems = params.problems.length ? ["What the check found:", ...params.problems] : [];
+  return {
+    subject: notice.subject(params.domain),
+    html: layout({
+      preheader: lead,
+      heading: notice.heading,
+      paragraphs: [lead, ...problems],
+      cta: { label: "Open the domain", url: params.url },
+    }),
+    text: `${notice.heading}\n\n${lead}\n\n${problems.join("\n")}\n\n${params.url}`.replace(/\n{3,}/g, "\n\n"),
+  };
+}

@@ -230,6 +230,7 @@ model ApiKey {
 enum DomainStatus {
   PENDING
   VERIFIED
+  DEGRADED // Verified, but the latest DNS check failed; still sendable while it is fixed
   FAILED
   SUSPENDED
 }
@@ -253,6 +254,11 @@ model Domain {
   returnPathVerified Boolean   @default(false)
   lastCheckedAt      DateTime?
   verifiedAt         DateTime?
+  // Automatic DNS checks (core/dns/domain-check.ts): when the next one is due, since when a
+  // verified domain has been failing, and what the last failed check found
+  nextCheckAt        DateTime?
+  failingSince       DateTime?
+  lastCheckError     String?   @db.Text
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
@@ -261,6 +267,7 @@ model Domain {
   dmarcReports DmarcReport[]
 
   @@unique([organizationId, name])
+  @@index([nextCheckAt])
   @@map("domains")
 }
 
@@ -280,6 +287,13 @@ enum EmailStatus {
   COMPLAINED
 }
 
+/// SYSTEM: TredMail's own account, billing and alert mail. It has its own queue and is never
+/// held by the IP warm-up cap, so sign-up and password reset keep working under load.
+enum EmailPriority {
+  NORMAL
+  SYSTEM
+}
+
 enum BounceType {
   HARD
   SOFT
@@ -287,26 +301,33 @@ enum BounceType {
 }
 
 model Email {
-  id             String      @id @default(cuid())
+  id             String        @id @default(cuid())
   organizationId String
   domainId       String
   from           String
   to             String[]
-  cc             String[]    @default([])
-  bcc            String[]    @default([])
+  cc             String[]      @default([])
+  bcc            String[]      @default([])
   replyTo        String?
   subject        String
-  htmlBody       String?     @db.Text
-  textBody       String?     @db.Text
-  status         EmailStatus @default(QUEUED)
-  messageId      String?     @unique // Unique RFC 5322 Message-ID
-  smtpResponse   String?     @db.Text
+  htmlBody       String?       @db.Text
+  textBody       String?       @db.Text
+  status         EmailStatus   @default(QUEUED)
+  messageId      String?       @unique // Unique RFC 5322 Message-ID
+  smtpResponse   String?       @db.Text
   metadata       Json? // Custom developer metadata
   tags           Json? // Categorization tags
-  trackOpens     Boolean     @default(true)
-  trackClicks    Boolean     @default(true)
+  trackOpens     Boolean       @default(true)
+  trackClicks    Boolean       @default(true)
   scheduledAt    DateTime? // Send no earlier than this
   templateId     String? // Template the email was rendered from, if any
+  priority       EmailPriority @default(NORMAL)
+  // Set just before each hand-off to the mail server, so a retry after a crash can tell
+  // whether the previous attempt may have got through (see core/delivery/attempts.ts)
+  sendAttemptAt  DateTime?
+  sendRoute      String? // mta | staging | fallback
+  // When KumoMTA reported receiving the message (its Reception log record)
+  mtaAcceptedAt  DateTime?
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -321,6 +342,8 @@ model Email {
   @@index([organizationId, status])
   @@index([organizationId, createdAt])
   @@index([status, scheduledAt])
+  @@index([status, updatedAt]) // outbox sweep
+  @@index([domainId])
   @@map("emails")
 }
 
@@ -426,10 +449,14 @@ model EmailEvent {
   linkUrl    String? // Target URL if type is CLICKED
   bounceType BounceType?
   details    Json? // Raw diagnostic / DSN / SMTP payload
+  // Identifies the source record (e.g. KumoMTA's log record) so a retried report is stored once
+  dedupeKey  String?
 
   email Email @relation(fields: [emailId], references: [id], onDelete: Cascade)
 
+  @@unique([emailId, dedupeKey])
   @@index([emailId, type])
+  @@index([type, timestamp]) // health checks and the circuit breaker
   @@map("email_events")
 }
 
@@ -500,6 +527,7 @@ model WebhookDelivery {
 
   @@index([webhookId, success])
   @@index([webhookId, createdAt])
+  @@index([status, nextAttemptAt]) // outbox sweep
   @@map("webhook_deliveries")
 }
 

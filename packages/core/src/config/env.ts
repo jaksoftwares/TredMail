@@ -65,6 +65,9 @@ const envSchema = z
     TRACKING_DOMAIN: z.string().default("track.tredmail.dovepeakdigital.com"),
     BOUNCE_DOMAIN: z.string().default("bounces.tredmail.dovepeakdigital.com"),
     DEFAULT_DKIM_SELECTOR: z.string().default("tredmail"),
+    // Automatic domain verification and daily re-checks. Defaults to on, except in development,
+    // where seeded domains are marked verified without real DNS records.
+    DOMAIN_AUTO_CHECKS: z.preprocess((val) => (val === undefined || val === "" ? undefined : val === "true" || val === true), z.boolean().optional()),
 
     // --- Delivery engine (KumoMTA) ---
     // Name the mail server announces (HELO) and its IP's PTR record points to.
@@ -195,9 +198,10 @@ const envSchema = z
 /** Workspace that owns TredMail's own sending domain. Created by the seed. */
 export const PLATFORM_ORG_SLUG = "tredmail-platform";
 
-export type Env = z.infer<typeof envSchema> & {
+export type Env = Omit<z.infer<typeof envSchema>, "DOMAIN_AUTO_CHECKS"> & {
   TRACKING_BASE_URL: string;
   CORS_ORIGIN_LIST: string[];
+  DOMAIN_AUTO_CHECKS: boolean;
 };
 
 /**
@@ -239,6 +243,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   const cfg = parsed.data;
   return {
     ...cfg,
+    DOMAIN_AUTO_CHECKS: cfg.DOMAIN_AUTO_CHECKS ?? cfg.NODE_ENV !== "development",
     TRACKING_BASE_URL: (cfg.TRACKING_BASE_URL ?? `${cfg.API_BASE_URL}/track`).replace(/\/+$/, ""),
     CORS_ORIGIN_LIST: (cfg.CORS_ORIGINS ?? cfg.CONSOLE_URL)
       .split(",")

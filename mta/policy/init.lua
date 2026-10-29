@@ -203,8 +203,14 @@ kumo.on('get_egress_path_config', function(routing_domain, egress_source, site_n
   return kumo.make_egress_path(params)
 end)
 
--- Report delivery outcomes (not receptions, and not this policy's own internal queues).
+-- Report delivery outcomes (not this policy's own internal queues).
 local REPORTED = { Delivery = true, Bounce = true, TransientFailure = true, Expiration = true, AdminBounce = true }
+
+-- Receptions are reported only for mail the worker injected (its VERP envelope sender starts
+-- with "b-"), so a retry after an interrupted hand-off knows the message already arrived.
+local function is_worker_reception(record)
+  return record.type == 'Reception' and type(record.sender) == 'string' and record.sender:sub(1, 2) == 'b-'
+end
 
 kumo.on('should_enqueue_log_record', function(msg, hook_name)
   local record = msg:get_meta 'log_record'
@@ -214,7 +220,7 @@ kumo.on('should_enqueue_log_record', function(msg, hook_name)
   if record.queue == HOOK_QUEUE or record.queue == INBOUND_QUEUE then
     return false
   end
-  if hook_name == 'tredmail' and REPORTED[record.type] then
+  if hook_name == 'tredmail' and (REPORTED[record.type] or is_worker_reception(record)) then
     msg:set_meta('queue', HOOK_QUEUE)
     return true
   end

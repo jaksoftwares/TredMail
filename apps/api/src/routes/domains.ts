@@ -4,7 +4,7 @@ import { prisma } from "@tredmail/db";
 import { generateDkimKeypair } from "@tredmail/core/security/dkim-keys";
 import { encryptSecret } from "@tredmail/core/security/crypto";
 import { generateExpectedDnsRecords } from "@tredmail/core/dns/generator";
-import { verifyDomainDns } from "@tredmail/core/dns/verifier";
+import { checkDomain, firstCheckAt } from "@tredmail/core/dns/domain-check";
 import { auditActor, authenticate, requireScope } from "../middleware/auth.js";
 import { recordAudit } from "@tredmail/core/services/audit";
 import { env } from "@tredmail/core/config/env";
@@ -49,7 +49,7 @@ export async function domainRoutes(fastify: FastifyInstance) {
         statusCode: 400,
         error: "validation_error",
         message: "Invalid domain payload.",
-        details: parseResult.error.errors,
+        details: parseResult.error.issues,
       });
     }
 
@@ -98,6 +98,8 @@ export async function domainRoutes(fastify: FastifyInstance) {
         dkimSelector: env.DEFAULT_DKIM_SELECTOR,
         dkimPublicKey: dkim.dnsTxtValue,
         dkimPrivateKey: encryptedPrivateKey,
+        // Checked automatically from here on; the customer does not need to press Verify
+        nextCheckAt: firstCheckAt(),
       },
     });
 
@@ -147,6 +149,9 @@ export async function domainRoutes(fastify: FastifyInstance) {
       created_at: d.createdAt.toISOString(),
       verified_at: d.verifiedAt?.toISOString() ?? null,
       last_checked_at: d.lastCheckedAt?.toISOString() ?? null,
+      next_check_at: d.nextCheckAt?.toISOString() ?? null,
+      failing_since: d.failingSince?.toISOString() ?? null,
+      last_check_error: d.lastCheckError,
       records: generateExpectedDnsRecords(d.name, d.dkimSelector, d.dkimPublicKey).map((r) => ({
         ...r,
         verified: verified[r.recordType] ?? false,
@@ -251,61 +256,26 @@ export async function domainRoutes(fastify: FastifyInstance) {
       });
     }
 
-    // Run active DNS query
-    const report = await verifyDomainDns(
-      domain.name,
-      domain.dkimSelector,
-      domain.dkimPublicKey,
-      `_spf.${env.PRIMARY_DOMAIN}`,
-      env.BOUNCE_DOMAIN
-    );
-
-    // A domain can be verified (and therefore sent from) by only one workspace.
-    if (report.isFullyVerified) {
-      const ownedElsewhere = await prisma.domain.findFirst({
-        where: { name: domain.name, status: "VERIFIED", organizationId: { not: orgId } },
-        select: { id: true },
-      });
-      if (ownedElsewhere) {
-        return reply.status(409).send({
-          statusCode: 409,
-          error: "domain_owned_elsewhere",
-          message: `'${domain.name}' is already verified by another TredMail workspace. Contact support if you own it.`,
-        });
-      }
+    if (domain.status === "SUSPENDED") {
+      return reply.status(409).send({ statusCode: 409, error: "domain_suspended", message: `'${domain.name}' is suspended. Contact support.` });
     }
 
-    const newStatus = report.isFullyVerified ? "VERIFIED" : domain.status;
-    if (newStatus === "VERIFIED" && domain.status !== "VERIFIED") {
-      await recordAudit({
-        organizationId: orgId,
-        ...auditActor(request),
-        action: "domain.verified",
-        targetType: "domain",
-        targetId: domain.id,
-        metadata: { name: domain.name },
-        ipAddress: request.ip,
+    // Same check, transitions and notifications as the automatic checks (core/dns/domain-check.ts)
+    const result = await checkDomain(domain, { ...auditActor(request), ipAddress: request.ip });
+    if (result.ownedElsewhere) {
+      return reply.status(409).send({
+        statusCode: 409,
+        error: "domain_owned_elsewhere",
+        message: `'${domain.name}' is already verified by another TredMail workspace. Contact support if you own it.`,
       });
     }
-
-    await prisma.domain.update({
-      where: { id: domain.id },
-      data: {
-        status: newStatus,
-        dkimVerified: report.dkimVerified,
-        spfVerified: report.spfVerified,
-        dmarcVerified: report.dmarcVerified,
-        returnPathVerified: report.returnPathVerified,
-        lastCheckedAt: new Date(),
-        verifiedAt: report.isFullyVerified ? new Date() : domain.verifiedAt,
-      },
-    });
 
     return reply.status(200).send({
       id: domain.id,
       name: domain.name,
-      status: newStatus.toLowerCase(),
-      report,
+      status: result.domain.status.toLowerCase(),
+      next_check_at: result.domain.nextCheckAt?.toISOString() ?? null,
+      report: result.report,
     });
   });
 }

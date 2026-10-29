@@ -2,6 +2,7 @@ import Fastify, { type RouteOptions } from "fastify";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import { env } from "@tredmail/core/config/env";
+import { TREDMAIL_VERSION } from "@tredmail/core/config/version";
 import { prisma } from "@tredmail/db";
 import { redisConnection } from "@tredmail/core/queue/redis";
 import { hashApiKey } from "@tredmail/core/security/api-keys";
@@ -24,8 +25,6 @@ import { billingRoutes } from "./routes/billing.js";
 import { planRoutes, usageRoutes } from "./routes/usage.js";
 import { adminRoutes } from "./routes/admin.js";
 import { paymentCallbackRoutes } from "./routes/payment-callbacks.js";
-
-const VERSION = "1.4.0";
 
 export interface BuildOptions {
   /** Called for every route as it is registered (used by the OpenAPI coverage test). */
@@ -59,7 +58,7 @@ export async function buildServer(options: BuildOptions = {}) {
   });
 
   // Liveness: the process is up. Readiness: its dependencies answer.
-  fastify.get("/health", async () => ({ status: "ok", service: "tredmail-api", version: VERSION }));
+  fastify.get("/health", async () => ({ status: "ok", service: "tredmail-api", version: TREDMAIL_VERSION }));
   fastify.get("/health/ready", async (_request, reply) => {
     const checks = await Promise.allSettled([prisma.$queryRaw`SELECT 1`, redisConnection.ping()]);
     const [database, redis] = checks.map((c) => (c.status === "fulfilled" ? "ok" : "down"));

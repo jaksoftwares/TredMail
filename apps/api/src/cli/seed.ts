@@ -20,6 +20,7 @@ import { generateApiKey } from "@tredmail/core/security/api-keys";
 import { encryptSecret } from "@tredmail/core/security/crypto";
 import { generateDkimKeypair } from "@tredmail/core/security/dkim-keys";
 import { generateExpectedDnsRecords } from "@tredmail/core/dns/generator";
+import { firstCheckAt } from "@tredmail/core/dns/domain-check";
 import { ensureSubscription } from "@tredmail/core/billing/subscriptions";
 import { INTERNAL_PLAN_ID } from "@tredmail/core/billing/plans";
 
@@ -58,13 +59,15 @@ async function ensureDomain(organizationId: string, name: string) {
       dmarcVerified: markVerified,
       returnPathVerified: markVerified,
       verifiedAt: markVerified ? new Date() : null,
+      // Verified automatically once its DNS records are published
+      nextCheckAt: markVerified ? null : firstCheckAt(),
     },
   });
 
   if (markVerified) {
     console.log(`  domain ${name}: marked verified (development only)`);
   } else {
-    console.log(`  domain ${name}: pending. Publish these records, then verify it in the console:`);
+    console.log(`  domain ${name}: pending. Publish these records; TredMail verifies it automatically within minutes:`);
     for (const record of generateExpectedDnsRecords(domain.name, domain.dkimSelector, domain.dkimPublicKey)) {
       console.log(`    ${record.type.padEnd(5)} ${record.name}\n          ${record.expectedValue}`);
     }

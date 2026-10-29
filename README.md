@@ -137,6 +137,8 @@ The complete technical blueprint is structured into the following deep-dive guid
   * Production-ready schema for Tenants, Users, Domains, API Keys, Messages, Delivery Events, Suppressions, and Webhooks.
 - 🚀 [Implementation Roadmap & Step-by-Step Build Plan](docs/ROADMAP_AND_IMPLEMENTATION.md)
   * Phase-by-phase execution plan from local prototype to production cloud deployment.
+- 🚧 [Pre-deployment Remediation Plan](docs/PRE_DEPLOYMENT_REMEDIATION.md)
+  * Every issue from the production-readiness audit, how to fix each one, the order to fix them in, and the release gate. Required before any deployment.
 
 ---
 

@@ -11,6 +11,7 @@ export const WEBHOOK_EVENT_TYPES = [
   "email.clicked",
   "email.bounced",
   "email.complained",
+  "domain.updated",
 ] as const;
 
 export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];

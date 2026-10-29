@@ -379,6 +379,7 @@ the service with a clear message in `$DC logs api`.
 | `MTA_WARMUP_START` | deploy script | first day of IP warm-up; clear it after day 20 |
 | `MTA_STS_MODE` | deploy script | `testing`, then `enforce` (4.10) |
 | `FALLBACK_SMTP_*` | optional | backup provider for mail above the warm-up cap; not needed at ~100/day |
+| `DOMAIN_AUTO_CHECKS` | optional | automatic domain verification and daily DNS re-checks; on unless set to `false` |
 | `MPESA_*` | you | section 4.5; full reference in `docs/BILLING_AND_PAYMENTS.md` |
 | `BILLING_*` | optional | tax, grace days (7), renewal notice (3 days) |
 | `GOOGLE_CLIENT_ID/SECRET` | optional | Google sign-in |
@@ -536,6 +537,9 @@ npm run test:smoke            # against the running dev stack; also test:account
 ---
 
 ## 9. Go-live checklist
+
+Do not start this checklist until every item in `docs/PRE_DEPLOYMENT_REMEDIATION.md` is
+closed and its release gate (section 5) has passed on staging.
 
 - [ ] Hostinger: port 25 out and 25/587/465 in opened, PTR = `mta1.tredmail.dovepeakdigital.com`
 - [ ] Namecheap: records 1 to 12, 14 to 16 and 19 added and resolving

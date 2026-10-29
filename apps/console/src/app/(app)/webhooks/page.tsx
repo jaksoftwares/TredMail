@@ -29,6 +29,7 @@ const EVENTS: { value: string; help: string }[] = [
   { value: "email.complained", help: "Marked as spam by the recipient" },
   { value: "email.opened", help: "" },
   { value: "email.clicked", help: "" },
+  { value: "domain.updated", help: "A domain was verified, or its DNS records started or stopped failing" },
 ];
 
 export default function WebhooksPage() {

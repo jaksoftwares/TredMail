@@ -174,7 +174,16 @@ function parseSchedule(value: string | undefined): { ok: true; at: Date | null }
  * queues it for delivery, now or at scheduled_at. Shared by the API, batch sends and the
  * SMTP relay so every path applies the same rules.
  */
-export async function acceptEmail(organizationId: string, payload: SendEmailInput): Promise<AcceptResult> {
+export interface AcceptOptions {
+  /**
+   * SYSTEM: TredMail's own mail (system-mailer.ts). It goes to the system queue, skips the
+   * warm-up cap and does not count against the platform workspace's plan.
+   */
+  priority?: "NORMAL" | "SYSTEM";
+}
+
+export async function acceptEmail(organizationId: string, payload: SendEmailInput, options: AcceptOptions = {}): Promise<AcceptResult> {
+  const priority = options.priority ?? "NORMAL";
   const content = await resolveContent(organizationId, payload);
   if (!content.ok) return content;
   if (!content.from) return fail(422, "missing_from", "Provide 'from' (or set a default sender on the template).");
@@ -216,8 +225,8 @@ export async function acceptEmail(organizationId: string, payload: SendEmailInpu
   if (!standing.ok) return standing;
 
   // Count the recipients against the plan's limits last, so refused requests use nothing.
-  const usage = await reserveUsage(organizationId, allRecipients.length);
-  if (!usage.ok) return usage;
+  const usage = priority === "SYSTEM" ? null : await reserveUsage(organizationId, allRecipients.length);
+  if (usage && !usage.ok) return usage;
 
   const attachments = (payload.attachments ?? []).map((a) => {
     const bytes = Buffer.from(a.content, "base64");
@@ -242,6 +251,7 @@ export async function acceptEmail(organizationId: string, payload: SendEmailInpu
         status: scheduledAt ? "SCHEDULED" : "QUEUED",
         scheduledAt,
         templateId: content.templateId,
+        priority,
         trackOpens: payload.track_opens ?? true,
         trackClicks: payload.track_clicks ?? true,
         metadata: payload.headers ? { headers: payload.headers } : undefined,
@@ -259,14 +269,14 @@ export async function acceptEmail(organizationId: string, payload: SendEmailInpu
     return created;
     })
     .catch(async (err) => {
-      await releaseUsage(organizationId, allRecipients.length, usage.day);
+      if (usage) await releaseUsage(organizationId, allRecipients.length, usage.day);
       throw err;
     });
 
   // The database row is the source of truth. If Redis is briefly unavailable, the worker's
   // outbox sweeper queues the email within a minute, so the request still succeeds.
   try {
-    await enqueueEmail({ emailId: email.id, organizationId, domainId: domain.id }, scheduledAt);
+    await enqueueEmail({ emailId: email.id, organizationId, domainId: domain.id }, scheduledAt, priority);
   } catch (err) {
     console.error(`[email] could not queue ${email.id} now; the outbox sweeper will retry`, err);
   }
@@ -342,7 +352,7 @@ export async function rescheduleEmail(
     },
   });
   await removeQueuedEmail(emailId).catch(() => undefined);
-  await enqueueEmail({ emailId, organizationId, domainId: email.domainId }, at).catch((err) =>
+  await enqueueEmail({ emailId, organizationId, domainId: email.domainId }, at, email.priority).catch((err) =>
     console.error(`[email] could not requeue ${emailId}; the outbox sweeper will retry`, err),
   );
   return { ok: true, scheduledAt: at };

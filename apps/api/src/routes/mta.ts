@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { prisma } from "@tredmail/db";
 import { env } from "@tredmail/core/config/env";
 import { redisConnection } from "@tredmail/core/queue/redis";
 import { createVerpCodec } from "@tredmail/core/mail/verp";
@@ -66,6 +67,14 @@ async function applyLogRecord(record: LogRecord): Promise<string> {
   };
 
   switch (record.type) {
+    case "Reception": {
+      // KumoMTA has the message: a retry after an interrupted hand-off must not send it again.
+      const updated = await prisma.email.updateMany({
+        where: { id: emailId, mtaAcceptedAt: null },
+        data: { mtaAcceptedAt: toDate(record.timestamp) ?? new Date() },
+      });
+      return updated.count > 0 ? "received" : "duplicate";
+    }
     case "Delivery":
       return (await recordDelivered({ ...base, response: response.text })) ? "delivered" : "duplicate";
     case "TransientFailure":

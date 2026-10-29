@@ -15,6 +15,7 @@ const MAILPIT_URL = (process.env.MAILPIT_URL ?? "http://localhost:8035").replace
 const CONSOLE_ORIGIN = process.env.CONSOLE_ORIGIN ?? "http://localhost:3010";
 const PLATFORM_DOMAIN = process.env.PRIMARY_DOMAIN ?? "tredmail.dovepeakdigital.com";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- loosely typed API responses in this test script
 type Json = Record<string, any>;
 
 /** Minimal cookie jar for one browser session. */

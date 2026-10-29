@@ -132,7 +132,7 @@ export async function accountRoutes(fastify: FastifyInstance) {
   // POST /v1/workspaces - Create a workspace; the creator becomes its Owner
   fastify.post("/workspaces", async (request, reply) => {
     const parsed = workspaceSchema.safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send(badRequest(parsed.error.errors));
+    if (!parsed.success) return reply.status(400).send(badRequest(parsed.error.issues));
 
     const user = request.sessionUser!;
     if (!user.emailVerified) {
@@ -166,7 +166,7 @@ export async function accountRoutes(fastify: FastifyInstance) {
   // POST /v1/invitations/accept - Join a workspace with an invitation token
   fastify.post("/invitations/accept", async (request, reply) => {
     const parsed = z.object({ token: z.string().min(20) }).safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send(badRequest(parsed.error.errors));
+    if (!parsed.success) return reply.status(400).send(badRequest(parsed.error.issues));
 
     const user = request.sessionUser!;
     const invitation = await prisma.invitation.findUnique({ where: { tokenHash: hashToken(parsed.data.token) } });
@@ -247,7 +247,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
   // PATCH /v1/workspace - Rename or update details (Owner/Admin)
   fastify.patch("/workspace", { preHandler: requireMemberManager }, async (request, reply) => {
     const parsed = workspaceSchema.partial().safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send(badRequest(parsed.error.errors));
+    if (!parsed.success) return reply.status(400).send(badRequest(parsed.error.issues));
     const org = await prisma.organization.update({
       where: { id: request.organization!.id },
       data: { name: parsed.data.name, useCase: parsed.data.use_case, website: parsed.data.website },
@@ -282,7 +282,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
   // PATCH /v1/members/:id - Change a member's role (Owner/Admin)
   fastify.patch<{ Params: { id: string } }>("/members/:id", { preHandler: requireMemberManager }, async (request, reply) => {
     const parsed = z.object({ role: roleSchema }).safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send(badRequest(parsed.error.errors));
+    if (!parsed.success) return reply.status(400).send(badRequest(parsed.error.issues));
 
     const actor = request.principal!;
     const actorRole = actor.kind === "user" ? actor.role : ("VIEWER" as WorkspaceRole);
@@ -370,7 +370,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
     const parsed = z
       .object({ email: z.string().trim().toLowerCase().email(), role: roleSchema.default("DEVELOPER") })
       .safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send(badRequest(parsed.error.errors));
+    if (!parsed.success) return reply.status(400).send(badRequest(parsed.error.issues));
 
     const actor = request.principal!;
     if (actor.kind !== "user" || !canAssignRole(actor.role, parsed.data.role)) {

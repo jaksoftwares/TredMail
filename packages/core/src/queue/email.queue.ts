@@ -1,5 +1,6 @@
 import { Queue } from "bullmq";
 import { redisConnection } from "./redis.js";
+import { EMAIL_MAX_ATTEMPTS } from "../delivery/attempts.js";
 
 /**
  * Jobs carry only identifiers: the worker reads the message from the database, so content
@@ -14,31 +15,42 @@ export interface EmailJobData {
 }
 
 export const EMAIL_QUEUE_NAME = "tredmail-email-delivery";
+/** TredMail's own account, billing and alert mail: never waits behind customer mail. */
+export const SYSTEM_EMAIL_QUEUE_NAME = "tredmail-system-delivery";
 
-export const emailQueue = new Queue<EmailJobData>(EMAIL_QUEUE_NAME, {
+/** Retry policy name; the worker's backoffStrategy implements it (core/delivery/attempts.ts). */
+export const EMAIL_BACKOFF_TYPE = "delivery";
+
+const queueOptions = {
   connection: redisConnection,
   defaultJobOptions: {
-    attempts: 5,
-    backoff: {
-      type: "exponential",
-      delay: 5000, // 5s, 10s, 20s, 40s...
-    },
+    attempts: EMAIL_MAX_ATTEMPTS,
+    backoff: { type: EMAIL_BACKOFF_TYPE },
     removeOnComplete: 1000,
     removeOnFail: 5000,
   },
-});
+};
+
+export const emailQueue = new Queue<EmailJobData>(EMAIL_QUEUE_NAME, queueOptions);
+export const systemEmailQueue = new Queue<EmailJobData>(SYSTEM_EMAIL_QUEUE_NAME, queueOptions);
+
+export type EmailPriorityName = "NORMAL" | "SYSTEM";
+
+const queueFor = (priority: EmailPriorityName = "NORMAL") => (priority === "SYSTEM" ? systemEmailQueue : emailQueue);
 
 /**
  * Queues an email for delivery, now or at `sendAt`. The job id is the email id, so queueing
  * the same email again is a no-op while its job exists.
  */
-export async function enqueueEmail(data: EmailJobData, sendAt?: Date | null) {
+export async function enqueueEmail(data: EmailJobData, sendAt?: Date | null, priority: EmailPriorityName = "NORMAL") {
   const delay = sendAt ? Math.max(0, sendAt.getTime() - Date.now()) : 0;
-  return await emailQueue.add(`deliver:${data.emailId}`, data, { jobId: data.emailId, delay });
+  return await queueFor(priority).add(`deliver:${data.emailId}`, data, { jobId: data.emailId, delay });
 }
 
 /** Removes an email's waiting or delayed job (when it is canceled or rescheduled). */
 export async function removeQueuedEmail(emailId: string) {
-  const job = await emailQueue.getJob(emailId);
-  if (job && !(await job.isActive())) await job.remove();
+  for (const queue of [emailQueue, systemEmailQueue]) {
+    const job = await queue.getJob(emailId);
+    if (job && !(await job.isActive())) await job.remove();
+  }
 }

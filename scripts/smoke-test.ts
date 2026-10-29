@@ -19,6 +19,7 @@ if (!API_KEY) {
   process.exit(1);
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- loosely typed API responses in this test script
 type Json = Record<string, any>;
 
 async function api(path: string, init: RequestInit = {}): Promise<{ status: number; body: Json }> {

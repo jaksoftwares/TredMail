@@ -5,6 +5,7 @@
  */
 import { API_SCOPES } from "../security/scopes.js";
 import { WEBHOOK_EVENT_TYPES } from "../webhooks/events.js";
+import { TREDMAIL_VERSION } from "../config/version.js";
 
 type Schema = Record<string, unknown>;
 
@@ -58,7 +59,7 @@ export const openApiSpec = {
   openapi: "3.1.0",
   info: {
     title: "TredMail API",
-    version: "1.4.0",
+    version: TREDMAIL_VERSION,
     description:
       "Transactional email API by Dovepeak Technologies. Authenticate with `Authorization: Bearer tred_live_...`. " +
       "Request and response bodies are JSON with snake_case fields. Errors share one shape: `{ statusCode, error, message }`.",
@@ -488,10 +489,16 @@ export const openApiSpec = {
       Domain: obj({
         id: str(),
         name: str(),
-        status: str(undefined, { enum: ["pending", "verified", "failed"] }),
+        status: str(
+          "pending: waiting for its DNS records (checked automatically). verified: sending. degraded: a re-check failed; still sending, fix within 72 hours. failed: sending stopped until the records pass again. suspended: by TredMail staff.",
+          { enum: ["pending", "verified", "degraded", "failed", "suspended"] },
+        ),
         region: str(),
         created_at: dateTime(),
         records: arr(ref("DnsRecord")),
+        next_check_at: nullable(dateTime("When TredMail checks the DNS records next (GET /domains/{id} only)")),
+        failing_since: nullable(dateTime("When a verified domain's checks started failing (GET /domains/{id} only)")),
+        last_check_error: nullable(str("What the last failed check found (GET /domains/{id} only)")),
       }),
       DmarcSummary: obj({
         domain: str(),

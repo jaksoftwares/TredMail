@@ -96,7 +96,7 @@ export default function OverviewPage() {
   const steps = {
     sent: m.totalEmails > 0,
     domain: (domains.data?.data.length ?? 0) > 0,
-    verified: domains.data?.data.some((d) => d.status === "verified") ?? false,
+    verified: domains.data?.data.some((d) => d.status === "verified" || d.status === "degraded") ?? false,
     key: (keys.data?.data.filter((k) => !k.revokedAt).length ?? 0) > 0,
     webhook: (webhooks.data?.data.length ?? 0) > 0,
     team: (members.data?.data.length ?? 0) > 1,

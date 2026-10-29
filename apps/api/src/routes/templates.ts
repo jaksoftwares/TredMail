@@ -25,7 +25,7 @@ const createSchema = z
   .object(templateFields)
   .refine((t) => t.html || t.text, { message: "Provide 'html', 'text' or both.", path: ["html"] });
 const updateSchema = z.object(templateFields).partial();
-const previewSchema = z.object({ variables: z.record(z.unknown()).default({}) });
+const previewSchema = z.object({ variables: z.record(z.string(), z.unknown()).default({}) });
 
 const serialize = (t: Template) => ({
   id: t.id,
@@ -73,7 +73,7 @@ export async function templateRoutes(fastify: FastifyInstance) {
   fastify.post("/", async (request, reply) => {
     const parsed = createSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.status(400).send({ statusCode: 400, error: "validation_error", message: "Invalid template.", details: parsed.error.errors });
+      return reply.status(400).send({ statusCode: 400, error: "validation_error", message: "Invalid template.", details: parsed.error.issues });
     }
     const t = parsed.data;
     try {
@@ -107,7 +107,7 @@ export async function templateRoutes(fastify: FastifyInstance) {
   fastify.patch<{ Params: { id: string } }>("/:id", async (request, reply) => {
     const parsed = updateSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.status(400).send({ statusCode: 400, error: "validation_error", message: "Invalid template.", details: parsed.error.errors });
+      return reply.status(400).send({ statusCode: 400, error: "validation_error", message: "Invalid template.", details: parsed.error.issues });
     }
     const existing = await find(request.organization!.id, request.params.id);
     if (!existing) return notFound(reply, request.params.id);
@@ -164,7 +164,7 @@ export async function templateRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: { id: string } }>("/:id/preview", async (request, reply) => {
     const parsed = previewSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
-      return reply.status(400).send({ statusCode: 400, error: "validation_error", message: "Send { \"variables\": { ... } }.", details: parsed.error.errors });
+      return reply.status(400).send({ statusCode: 400, error: "validation_error", message: "Send { \"variables\": { ... } }.", details: parsed.error.issues });
     }
     const template = await find(request.organization!.id, request.params.id);
     if (!template) return notFound(reply, request.params.id);

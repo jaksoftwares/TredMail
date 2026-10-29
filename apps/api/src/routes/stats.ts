@@ -75,7 +75,7 @@ export async function statsRoutes(fastify: FastifyInstance) {
   fastify.get("/timeseries", async (request, reply) => {
     const parsed = timeseriesQuerySchema.safeParse(request.query);
     if (!parsed.success) {
-      return reply.status(400).send({ statusCode: 400, error: "validation_error", message: "Invalid parameters.", details: parsed.error.errors });
+      return reply.status(400).send({ statusCode: 400, error: "validation_error", message: "Invalid parameters.", details: parsed.error.issues });
     }
     const { days, domain } = parsed.data;
     const orgId = request.organization!.id;
@@ -116,7 +116,7 @@ export async function statsRoutes(fastify: FastifyInstance) {
   fastify.get("/domains", async (request, reply) => {
     const parsed = timeseriesQuerySchema.safeParse(request.query);
     if (!parsed.success) {
-      return reply.status(400).send({ statusCode: 400, error: "validation_error", message: "Invalid parameters.", details: parsed.error.errors });
+      return reply.status(400).send({ statusCode: 400, error: "validation_error", message: "Invalid parameters.", details: parsed.error.issues });
     }
     const since = new Date(Date.now() - parsed.data.days * 86_400_000);
     const rows = await prisma.$queryRaw<Array<{ domain: string; status: string; count: bigint }>>`

@@ -5,7 +5,8 @@ import { acceptEmail, getPlatformOrganizationId } from "./email-service.js";
 /**
  * Sends TredMail's own account emails (verification, password reset, invitations) through
  * the normal TredMail pipeline, from no-reply@<platform domain> in the platform workspace.
- * Tracking is off: these messages carry security links.
+ * Tracking is off: these messages carry security links. They are SYSTEM priority: their own
+ * queue, no warm-up cap, so account email keeps flowing when customer volume is high.
  */
 export async function sendSystemEmail(to: string, email: RenderedEmail): Promise<void> {
   const platformId = await getPlatformOrganizationId();
@@ -22,7 +23,7 @@ export async function sendSystemEmail(to: string, email: RenderedEmail): Promise
     track_opens: false,
     track_clicks: false,
     tags: [{ name: "category", value: "account" }],
-  });
+  }, { priority: "SYSTEM" });
 
   if (!result.ok) {
     throw new Error(`System email to ${to} was not accepted: ${result.error} (${result.message})`);

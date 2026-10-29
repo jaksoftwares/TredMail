@@ -6,6 +6,8 @@ export interface RecordVerificationResult {
   expected: string;
   found?: string;
   error?: string;
+  /** The lookup itself failed (timeout, server failure): says nothing about the record. */
+  transient?: boolean;
 }
 
 export interface DomainVerificationReport {
@@ -15,7 +17,19 @@ export interface DomainVerificationReport {
   spfVerified: boolean;
   dmarcVerified: boolean;
   returnPathVerified: boolean;
+  /** A required record could not be checked because DNS did not answer: try again soon. */
+  inconclusive: boolean;
   records: RecordVerificationResult[];
+}
+
+// Answers that prove a record is absent. Anything else (ETIMEOUT, ESERVFAIL, ECONNREFUSED...)
+// is a resolver problem, not evidence that the customer removed the record.
+const DEFINITE_DNS_CODES = new Set(["ENOTFOUND", "ENODATA", "NXDOMAIN"]);
+const isTransient = (err: unknown) => !DEFINITE_DNS_CODES.has((err as NodeJS.ErrnoException).code ?? "");
+
+/** The resolver's error code (ENOTFOUND, ENODATA, ...) or, failing that, its message. */
+function dnsError(err: unknown): string {
+  return (err as NodeJS.ErrnoException).code ?? (err instanceof Error ? err.message : String(err));
 }
 
 /**
@@ -75,12 +89,13 @@ export async function verifyDomainDns(
         error: "DKIM TXT record not found at " + dkimHost,
       });
     }
-  } catch (err: any) {
+  } catch (err) {
     results.push({
       recordType: "DKIM",
       verified: false,
       expected: expectedDkimPublicKey,
-      error: `DNS lookup failed for ${dkimHost}: ${err.code || err.message}`,
+      error: `DNS lookup failed for ${dkimHost}: ${dnsError(err)}`,
+      transient: isTransient(err),
     });
   }
 
@@ -107,12 +122,13 @@ export async function verifyDomainDns(
         error: "No SPF (v=spf1) record found on " + cleanDomain,
       });
     }
-  } catch (err: any) {
+  } catch (err) {
     results.push({
       recordType: "SPF",
       verified: false,
       expected: `include:${expectedSpfInclude}`,
-      error: `DNS lookup failed for SPF: ${err.code || err.message}`,
+      error: `DNS lookup failed for SPF: ${dnsError(err)}`,
+      transient: isTransient(err),
     });
   }
 
@@ -130,12 +146,13 @@ export async function verifyDomainDns(
       found: dmarcRecord,
       error: dmarcRecord ? undefined : "No DMARC record found at " + dmarcHost,
     });
-  } catch (err: any) {
+  } catch (err) {
     results.push({
       recordType: "DMARC",
       verified: false,
       expected: "v=DMARC1; ...",
-      error: `DNS lookup failed for ${dmarcHost}: ${err.code || err.message}`,
+      error: `DNS lookup failed for ${dmarcHost}: ${dnsError(err)}`,
+      transient: isTransient(err),
     });
   }
 
@@ -154,12 +171,13 @@ export async function verifyDomainDns(
       found: cnameRecords.join(", "),
       error: matchesCname ? undefined : `CNAME points to ${cnameRecords.join(", ")}, expected ${expectedBounceCname}`,
     });
-  } catch (err: any) {
+  } catch (err) {
     results.push({
       recordType: "RETURN_PATH",
       verified: false,
       expected: expectedBounceCname,
-      error: `CNAME lookup failed for ${bounceHost}: ${err.code || err.message}`,
+      error: `CNAME lookup failed for ${bounceHost}: ${dnsError(err)}`,
+      transient: isTransient(err),
     });
   }
 
@@ -175,6 +193,7 @@ export async function verifyDomainDns(
     spfVerified,
     dmarcVerified,
     returnPathVerified,
+    inconclusive: results.some((r) => r.recordType !== "RETURN_PATH" && !r.verified && r.transient === true),
     records: results,
   };
 }

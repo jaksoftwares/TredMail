@@ -2973,10 +2973,13 @@
           },
           "status": {
             "type": "string",
+            "description": "pending: waiting for its DNS records (checked automatically). verified: sending. degraded: a re-check failed; still sending, fix within 72 hours. failed: sending stopped until the records pass again. suspended: by TredMail staff.",
             "enum": [
               "pending",
               "verified",
-              "failed"
+              "degraded",
+              "failed",
+              "suspended"
             ]
           },
           "region": {
@@ -2991,6 +2994,29 @@
             "items": {
               "$ref": "#/components/schemas/DnsRecord"
             }
+          },
+          "next_check_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When TredMail checks the DNS records next (GET /domains/{id} only)",
+            "format": "date-time"
+          },
+          "failing_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When a verified domain's checks started failing (GET /domains/{id} only)",
+            "format": "date-time"
+          },
+          "last_check_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the last failed check found (GET /domains/{id} only)"
           }
         }
       },
@@ -3072,7 +3098,8 @@
           "email.opened",
           "email.clicked",
           "email.bounced",
-          "email.complained"
+          "email.complained",
+          "domain.updated"
         ]
       },
       "Webhook": {

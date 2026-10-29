@@ -3,6 +3,15 @@ import { createVerpCodec, returnPathDomainFor } from "../src/mail/verp.js";
 import { classifyFailure } from "../src/mail/bounce-classifier.js";
 import { parseInboundReport } from "../src/mail/report-parser.js";
 import { WARMUP_SCHEDULE, msUntilNextUtcDay, warmupCap } from "../src/delivery/warmup.js";
+import {
+  classifySendError,
+  describeSendError,
+  domainHoldDecision,
+  emailRetryDelay,
+  emailRetryWindowMs,
+  recoveryDecision,
+  type PreviousAttempt,
+} from "../src/delivery/attempts.js";
 
 const KEY = "a".repeat(64);
 const EMAIL_ID = "cmvgkysyx0009ixtdd4hv89d7";
@@ -199,5 +208,69 @@ describe("warm-up schedule", () => {
 
   it("computes the wait until the next UTC day", () => {
     expect(msUntilNextUtcDay(new Date("2026-11-01T23:00:00Z"))).toBe(3_600_000);
+  });
+});
+
+describe("delivery attempts", () => {
+  it("retries for at least 6 hours, quickly at first", () => {
+    expect(emailRetryDelay(1)).toBe(30_000);
+    expect(emailRetryDelay(5)).toBe(600_000);
+    expect(emailRetryDelay(6)).toBe(900_000);
+    expect(emailRetryDelay(29)).toBe(900_000);
+    expect(emailRetryWindowMs()).toBeGreaterThanOrEqual(6 * 3600_000);
+  });
+
+  it("treats a refused message as permanent, and connection or login problems as retryable", () => {
+    expect(classifySendError({ responseCode: 550 })).toBe("permanent");
+    expect(classifySendError({ responseCode: 552 })).toBe("permanent");
+    expect(classifySendError({ responseCode: 535 })).toBe("not_sent");
+    expect(classifySendError({ responseCode: 451 })).toBe("not_sent");
+    expect(classifySendError({ code: "ECONNECTION" })).toBe("not_sent");
+    // What nodemailer raises when KumoMTA is down (an AggregateError over ::1 and 127.0.0.1)
+    expect(classifySendError({ code: "ESOCKET", command: "CONN", message: "" })).toBe("not_sent");
+    expect(classifySendError({ code: "ESOCKET", command: "RCPT TO" })).toBe("not_sent");
+    expect(classifySendError({ code: "ETIMEDOUT", command: "DATA" })).toBe("unknown");
+    expect(classifySendError({ code: "ETIMEDOUT" })).toBe("unknown");
+    expect(classifySendError({ message: "socket closed" })).toBe("unknown");
+  });
+
+  it("describes connection failures that carry no message", () => {
+    const refused = Object.assign(new AggregateError([{ code: "ECONNREFUSED" }, { code: "ECONNREFUSED" }], ""), { code: "ESOCKET", command: "CONN" });
+    expect(describeSendError(refused)).toBe("ESOCKET: ECONNREFUSED (during CONN)");
+    expect(describeSendError(Object.assign(new Error("550 5.7.1 Relaying denied"), { responseCode: 550, command: "RCPT TO" }))).toBe(
+      "550 5.7.1 Relaying denied (during RCPT TO)",
+    );
+  });
+
+  const attempt = (over: Partial<PreviousAttempt>): PreviousAttempt => ({
+    status: "SENDING",
+    sendAttemptAt: new Date("2026-11-01T10:00:00Z"),
+    sendRoute: "mta",
+    mtaAcceptedAt: null,
+    ...over,
+  });
+
+  it("does not resend an email KumoMTA already reported receiving", () => {
+    expect(recoveryDecision(attempt({ mtaAcceptedAt: new Date("2026-11-01T10:00:01Z") }))).toEqual({ action: "already_sent" });
+  });
+
+  it("waits for the reception report before resending through KumoMTA", () => {
+    const decision = recoveryDecision(attempt({}), new Date("2026-11-01T10:00:30Z"));
+    expect(decision).toEqual({ action: "wait", until: new Date("2026-11-01T10:02:00Z") });
+    expect(recoveryDecision(attempt({}), new Date("2026-11-01T10:02:01Z"))).toEqual({ action: "send" });
+  });
+
+  it("sends normally when there was no interrupted attempt, or the route cannot report", () => {
+    expect(recoveryDecision(attempt({ status: "QUEUED" }))).toEqual({ action: "send" });
+    expect(recoveryDecision(attempt({ sendAttemptAt: null }))).toEqual({ action: "send" });
+    expect(recoveryDecision(attempt({ sendRoute: "fallback" }), new Date("2026-11-01T10:00:10Z"))).toEqual({ action: "send" });
+  });
+
+  it("holds mail from an unverified domain for 72 hours, then fails it", () => {
+    const queued = new Date("2026-11-01T00:00:00Z");
+    expect(domainHoldDecision("VERIFIED", queued)).toBe("send");
+    expect(domainHoldDecision("DEGRADED", queued)).toBe("send");
+    expect(domainHoldDecision("PENDING", queued, new Date("2026-11-02T00:00:00Z"))).toBe("hold");
+    expect(domainHoldDecision("FAILED", queued, new Date("2026-11-04T00:00:00Z"))).toBe("fail");
   });
 });

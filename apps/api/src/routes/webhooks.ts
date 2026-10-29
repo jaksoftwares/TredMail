@@ -74,7 +74,7 @@ export async function webhookRoutes(fastify: FastifyInstance) {
         statusCode: 400,
         error: "validation_error",
         message: "Invalid webhook configuration.",
-        details: parseResult.error.errors,
+        details: parseResult.error.issues,
       });
     }
 
@@ -169,7 +169,7 @@ export async function webhookRoutes(fastify: FastifyInstance) {
   fastify.patch<{ Params: { id: string } }>("/:id", async (request, reply) => {
     const parsed = updateWebhookSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.status(400).send({ statusCode: 400, error: "validation_error", message: "Invalid webhook update.", details: parsed.error.errors });
+      return reply.status(400).send({ statusCode: 400, error: "validation_error", message: "Invalid webhook update.", details: parsed.error.issues });
     }
     const webhook = await findWebhook(request.organization!.id, request.params.id);
     if (!webhook) return reply.status(404).send(notFound);
@@ -224,7 +224,7 @@ export async function webhookRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { id: string } }>("/:id/deliveries", async (request, reply) => {
     const parsed = deliveriesQuerySchema.safeParse(request.query);
     if (!parsed.success) {
-      return reply.status(400).send({ statusCode: 400, error: "validation_error", message: "Invalid list parameters.", details: parsed.error.errors });
+      return reply.status(400).send({ statusCode: 400, error: "validation_error", message: "Invalid list parameters.", details: parsed.error.issues });
     }
     const webhook = await findWebhook(request.organization!.id, request.params.id);
     if (!webhook) return reply.status(404).send(notFound);

@@ -31,6 +31,7 @@ if (!API_KEY) {
   process.exit(1);
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- loosely typed API responses in this test script
 type Json = Record<string, any>;
 const run = Date.now();
 const step = (message: string) => console.log(`- ${message}`);

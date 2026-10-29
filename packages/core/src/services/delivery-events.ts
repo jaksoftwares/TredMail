@@ -46,11 +46,25 @@ async function loadEmail(emailId: string): Promise<EmailRow | null> {
 
 async function alreadyRecorded(emailId: string, dedupeKey: string | undefined): Promise<boolean> {
   if (!dedupeKey) return false;
-  const existing = await prisma.emailEvent.findFirst({
-    where: { emailId, details: { path: ["dedupeKey"], equals: dedupeKey } },
+  const existing = await prisma.emailEvent.findUnique({
+    where: { emailId_dedupeKey: { emailId, dedupeKey } },
     select: { id: true },
   });
   return existing !== null;
+}
+
+/**
+ * Stores an event at most once per (email, dedupeKey). The unique index settles races between
+ * concurrent retries of the same report: the loser gets false and applies nothing.
+ */
+async function createEventOnce(data: Prisma.EmailEventUncheckedCreateInput): Promise<boolean> {
+  try {
+    await prisma.emailEvent.create({ data });
+    return true;
+  } catch (err) {
+    if ((err as { code?: string }).code === "P2002") return false;
+    throw err;
+  }
 }
 
 /** The single recipient of an email, when a report does not say which address it is about. */
@@ -94,14 +108,16 @@ export async function recordDelivered(input: Base & { response?: string }): Prom
   if (!email || (await alreadyRecorded(email.id, input.dedupeKey))) return false;
   const at = input.at ?? new Date();
 
-  await prisma.emailEvent.create({
-    data: {
+  if (
+    !(await createEventOnce({
       emailId: email.id,
       type: "DELIVERED",
       timestamp: at,
       details: { ...input.details, recipient: input.recipient, response: input.response, source: input.source, dedupeKey: input.dedupeKey },
-    },
-  });
+      dedupeKey: input.dedupeKey,
+    }))
+  )
+    return false;
   await applyStatus(email, "DELIVERED", email.status === "DELIVERED" ? {} : { deliveredAt: at, smtpResponse: input.response });
   fireWebhook(email, "email.delivered", { recipient: input.recipient, smtp_response: input.response, delivered_at: at.toISOString() });
   return true;
@@ -111,8 +127,8 @@ export async function recordDeferred(input: Base & { response?: string; attempt?
   const email = await loadEmail(input.emailId);
   if (!email || (await alreadyRecorded(email.id, input.dedupeKey))) return false;
 
-  await prisma.emailEvent.create({
-    data: {
+  if (
+    !(await createEventOnce({
       emailId: email.id,
       type: "DEFERRED",
       timestamp: input.at ?? new Date(),
@@ -124,8 +140,10 @@ export async function recordDeferred(input: Base & { response?: string; attempt?
         source: input.source,
         dedupeKey: input.dedupeKey,
       },
-    },
-  });
+      dedupeKey: input.dedupeKey,
+    }))
+  )
+    return false;
   fireWebhook(email, "email.deferred", { recipient: input.recipient, smtp_response: input.response, attempt: input.attempt });
   return true;
 }
@@ -160,8 +178,8 @@ export async function recordBounce(input: BounceInput): Promise<boolean> {
     return recordDeferred({ ...input, recipient, response: diagnostic });
   }
 
-  await prisma.emailEvent.create({
-    data: {
+  if (
+    !(await createEventOnce({
       emailId: email.id,
       type: "BOUNCED",
       timestamp: input.at ?? new Date(),
@@ -177,8 +195,10 @@ export async function recordBounce(input: BounceInput): Promise<boolean> {
         source: input.source,
         dedupeKey: input.dedupeKey,
       },
-    },
-  });
+      dedupeKey: input.dedupeKey,
+    }))
+  )
+    return false;
   if (classification.suppress && recipient) {
     await suppress(email.organizationId, recipient, "HARD_BOUNCE", diagnostic);
   }
@@ -199,14 +219,16 @@ export async function recordExpired(input: Base & { response?: string }): Promis
   const email = await loadEmail(input.emailId);
   if (!email || (await alreadyRecorded(email.id, input.dedupeKey))) return false;
 
-  await prisma.emailEvent.create({
-    data: {
+  if (
+    !(await createEventOnce({
       emailId: email.id,
       type: "FAILED",
       timestamp: input.at ?? new Date(),
       details: { ...input.details, recipient: input.recipient, response: input.response, source: input.source, dedupeKey: input.dedupeKey },
-    },
-  });
+      dedupeKey: input.dedupeKey,
+    }))
+  )
+    return false;
   await applyStatus(email, "FAILED", { smtpResponse: input.response?.slice(0, 2000) });
   fireWebhook(email, "email.failed", { recipient: input.recipient, error: input.response ?? "Delivery expired after retries" });
   return true;
@@ -221,15 +243,17 @@ export async function recordComplaint(input: Base & { feedbackType?: string }): 
   const named = input.recipient?.toLowerCase();
   const recipient = named && isRecipientOf(email, named) ? named : soleRecipient(email);
 
-  await prisma.emailEvent.create({
-    data: {
+  if (
+    !(await createEventOnce({
       emailId: email.id,
       type: "COMPLAINED",
       timestamp: input.at ?? new Date(),
       bounceType: "SPAM_COMPLAINT",
       details: { ...input.details, recipient, feedbackType: input.feedbackType, source: input.source, dedupeKey: input.dedupeKey },
-    },
-  });
+      dedupeKey: input.dedupeKey,
+    }))
+  )
+    return false;
   if (recipient) await suppress(email.organizationId, recipient, "SPAM_COMPLAINT", `Spam complaint (${input.feedbackType ?? "abuse"})`);
   await applyStatus(email, "COMPLAINED");
   fireWebhook(email, "email.complained", { recipient, feedback_type: input.feedbackType ?? "abuse" });

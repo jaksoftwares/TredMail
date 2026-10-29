@@ -1,7 +1,8 @@
 import { DelayedError, Worker, Job, UnrecoverableError } from "bullmq";
-import nodemailer from "nodemailer";
+import nodemailer, { type SendMailOptions } from "nodemailer";
+import type SMTPTransport from "nodemailer/lib/smtp-transport";
 import { redisConnection } from "@tredmail/core/queue/redis";
-import { EMAIL_QUEUE_NAME, EmailJobData } from "@tredmail/core/queue/email.queue";
+import { EMAIL_QUEUE_NAME, SYSTEM_EMAIL_QUEUE_NAME, type EmailJobData } from "@tredmail/core/queue/email.queue";
 import { prisma } from "@tredmail/db";
 import { decryptSecret } from "@tredmail/core/security/crypto";
 import { createTrackingSigner } from "@tredmail/core/security/tracking-signature";
@@ -11,6 +12,15 @@ import { dispatchWebhookEvent } from "@tredmail/core/webhooks/dispatcher";
 import { createVerpCodec, returnPathDomainFor } from "@tredmail/core/mail/verp";
 import { msUntilNextUtcDay, reserveWarmupSlots, warmupCap } from "@tredmail/core/delivery/warmup";
 import { isStagingAllowlisted, parseAllowlist } from "@tredmail/core/delivery/staging-allowlist";
+import {
+  DOMAIN_RECHECK_MS,
+  classifySendError,
+  describeSendError,
+  domainHoldDecision,
+  emailRetryDelay,
+  recoveryDecision,
+  type SendErrorLike,
+} from "@tredmail/core/delivery/attempts";
 import { startMonitor } from "./monitor.js";
 import { startWebhookWorker } from "./webhooks.js";
 
@@ -61,9 +71,11 @@ type Route = "mta" | "fallback" | "staging";
 /**
  * Picks the route for a message: our own mail server while today's warm-up allowance lasts,
  * then the fallback relay. Returns null when the cap is reached and there is no fallback.
+ * TredMail's own (SYSTEM) mail is low volume and always uses our mail server, outside the cap.
  */
-async function chooseRoute(recipients: string[]): Promise<Route | null> {
+async function chooseRoute(recipients: string[], priority: string): Promise<Route | null> {
   if (stagingTransporter && recipients.every((r) => isStagingAllowlisted(r, stagingAllowlist))) return "staging";
+  if (priority === "SYSTEM") return "mta";
   const cap = warmupCap(env.MTA_WARMUP_START);
   if (await reserveWarmupSlots(redisConnection, cap, recipients.length)) return "mta";
   return fallbackTransporter ? "fallback" : null;
@@ -72,9 +84,75 @@ async function chooseRoute(recipients: string[]): Promise<Route | null> {
 const transporterFor = (route: Route) =>
   route === "mta" ? transporter : route === "staging" ? stagingTransporter! : fallbackTransporter!;
 
-const describe = (err: unknown) => (err instanceof Error ? err.message : String(err));
+const describe = describeSendError;
 
 const SENDABLE = new Set(["QUEUED", "SCHEDULED", "SENDING"]);
+
+/** Retries a database write a few times: it follows a hand-off that must not be repeated. */
+async function persist<T>(write: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await write();
+    } catch (err) {
+      if (attempt >= 4) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+    }
+  }
+}
+
+interface SentResult {
+  route: string;
+  messageId: string;
+  response: string;
+  accepted: string[];
+  rejected: string[];
+}
+
+/** Records the mail server's acceptance (SENT) and announces it. */
+async function markSent(email: { id: string; organizationId: string; to: string[]; from: string; subject: string }, result: SentResult) {
+  const sentAt = new Date();
+  await persist(() =>
+    prisma.$transaction([
+      prisma.email.update({
+        where: { id: email.id },
+        data: { status: "SENT", messageId: result.messageId, smtpResponse: result.response, sendAttemptAt: null },
+      }),
+      prisma.emailEvent.create({
+        data: {
+          emailId: email.id,
+          type: "SENT",
+          details: { route: result.route, smtpResponse: result.response, accepted: result.accepted, rejected: result.rejected },
+        },
+      }),
+    ]),
+  );
+  await dispatchWebhookEvent(email.organizationId, "email.sent", {
+    email_id: email.id,
+    to: email.to,
+    from: email.from,
+    subject: email.subject,
+    smtp_response: result.response,
+    sent_at: sentAt.toISOString(),
+  }).catch((err) => console.error("webhook dispatch failed", err));
+}
+
+/** Holds a job until `at`, recording why once per reason (the dedupe key keeps it to one event). */
+async function hold(job: Job<EmailJobData>, token: string | undefined, at: number, reason: string): Promise<never> {
+  await prisma.emailEvent
+    .create({
+      data: {
+        emailId: job.data.emailId,
+        type: "DEFERRED",
+        dedupeKey: `hold:${reason}`,
+        details: { reason, retryAt: new Date(at).toISOString() },
+      },
+    })
+    .catch((err) => {
+      if ((err as { code?: string }).code !== "P2002") throw err;
+    });
+  await job.moveToDelayed(at, token);
+  throw new DelayedError();
+}
 
 function categoryOf(tags: unknown): string {
   const list = Array.isArray(tags) ? (tags as Array<{ name?: unknown; value?: unknown }>) : [];
@@ -96,9 +174,36 @@ async function deliver(job: Job<EmailJobData>, token?: string) {
     throw new DelayedError();
   }
 
+  const recipients = [...email.to, ...email.cc, ...email.bcc];
+  const messageId = `<${emailId}@${email.domain.name}>`;
+
+  // A previous attempt may have reached the mail server before the process died or the SENT
+  // write failed. KumoMTA reports each reception, so check before sending a second copy.
+  const recovery = recoveryDecision(email);
+  if (recovery.action === "already_sent") {
+    await markSent(email, {
+      route: email.sendRoute ?? "mta",
+      messageId,
+      response: "Accepted by the mail server (recorded after an interrupted attempt)",
+      accepted: recipients,
+      rejected: [],
+    });
+    return { recovered: true };
+  }
+  if (recovery.action === "wait") {
+    await job.moveToDelayed(recovery.until.getTime(), token);
+    throw new DelayedError();
+  }
+
+  // A domain that is not verified right now is usually a DNS problem being fixed: hold the
+  // mail and check again, and fail it only after a long wait.
   const domain = email.domain;
-  if (domain.status !== "VERIFIED") {
-    throw new UnrecoverableError(`Domain ${domain.name} is no longer verified.`);
+  const domainDecision = domainHoldDecision(domain.status, email.scheduledAt ?? email.createdAt);
+  if (domainDecision === "fail") {
+    throw new UnrecoverableError(`Domain ${domain.name} has not been verified for 72 hours, so this email was not sent.`);
+  }
+  if (domainDecision === "hold") {
+    await hold(job, token, Date.now() + DOMAIN_RECHECK_MS, "domain_not_verified");
   }
 
   // Never send unsigned mail: it would fail DMARC and damage the domain's reputation.
@@ -109,19 +214,18 @@ async function deliver(job: Job<EmailJobData>, token?: string) {
     throw new UnrecoverableError(`Cannot decrypt DKIM key for ${domain.name}: ${describe(err)}`);
   }
 
-  const recipients = [...email.to, ...email.cc, ...email.bcc];
-  const route = await chooseRoute(recipients);
+  const route = await chooseRoute(recipients, email.priority);
   if (!route) {
     // Warm-up cap reached and no fallback relay: hold the message until tomorrow's allowance.
-    const delay = msUntilNextUtcDay() + Math.floor(Math.random() * 15 * 60_000);
-    await prisma.emailEvent.create({
-      data: { emailId, type: "DEFERRED", details: { reason: "warmup_cap_reached", retryAt: new Date(Date.now() + delay).toISOString() } },
-    });
-    await job.moveToDelayed(Date.now() + delay, token);
-    throw new DelayedError();
+    const day = new Date().toISOString().slice(0, 10);
+    return hold(job, token, Date.now() + msUntilNextUtcDay() + Math.floor(Math.random() * 15 * 60_000), `warmup_cap_reached:${day}`);
   }
 
-  await prisma.email.update({ where: { id: emailId }, data: { status: "SENDING" } });
+  // The attempt marker: from here until SENT is written, a retry checks before resending.
+  await prisma.email.update({
+    where: { id: emailId },
+    data: { status: "SENDING", sendAttemptAt: new Date(), sendRoute: route, mtaAcceptedAt: null },
+  });
 
   const prepared = prepareEmailBody(emailId, email.htmlBody ?? undefined, email.textBody ?? undefined, {
     trackOpens: email.trackOpens,
@@ -146,7 +250,7 @@ async function deliver(job: Job<EmailJobData>, token?: string) {
         }))
       : job.data.attachments?.map((att) => ({ filename: att.filename, content: Buffer.from(att.content, "base64"), contentType: att.contentType }));
 
-  const info = await transporterFor(route).sendMail({
+  const message: SendMailOptions = {
     envelope,
     from: email.from,
     to: email.to,
@@ -156,7 +260,7 @@ async function deliver(job: Job<EmailJobData>, token?: string) {
     subject: email.subject,
     html: prepared.html,
     text: prepared.text,
-    messageId: `<${emailId}@${domain.name}>`,
+    messageId,
     headers: {
       ...customHeaders,
       "X-TredMail-ID": emailId,
@@ -169,56 +273,56 @@ async function deliver(job: Job<EmailJobData>, token?: string) {
       keySelector: domain.dkimSelector,
       privateKey: dkimPrivateKey,
     },
-  });
+  };
+
+  let info: SMTPTransport.SentMessageInfo;
+  try {
+    info = await transporterFor(route).sendMail(message);
+  } catch (err) {
+    const kind = classifySendError(err as SendErrorLike);
+    // A definite failure means the server does not have the message: clear the marker so the
+    // retry sends at once. When unsure, keep it so the retry checks for a reception first.
+    if (kind !== "unknown") {
+      await prisma.email.update({ where: { id: emailId }, data: { sendAttemptAt: null } }).catch(() => undefined);
+    }
+    if (kind === "permanent") throw new UnrecoverableError(`The mail server refused this email: ${describe(err)}`);
+    throw err;
+  }
 
   // Accepted by the mail server. DELIVERED comes later from KumoMTA's delivery log; mail sent
   // through the fallback relay stays SENT (that provider's events are not collected).
-  const sentAt = new Date();
-  await prisma.$transaction([
-    prisma.email.update({
-      where: { id: emailId },
-      data: { status: "SENT", messageId: info.messageId, smtpResponse: info.response },
-    }),
-    prisma.emailEvent.create({
-      data: {
-        emailId,
-        type: "SENT",
-        details: {
-          route,
-          smtpResponse: info.response,
-          accepted: info.accepted.map(String),
-          rejected: info.rejected.map(String),
-        },
-      },
-    }),
-  ]);
-
-  await dispatchWebhookEvent(email.organizationId, "email.sent", {
-    email_id: emailId,
-    to: email.to,
-    from: email.from,
-    subject: email.subject,
-    smtp_response: info.response,
-    sent_at: sentAt.toISOString(),
-  }).catch((err) => console.error("webhook dispatch failed", err));
-
+  await markSent(email, {
+    route,
+    messageId: info.messageId,
+    response: info.response,
+    accepted: info.accepted.map(String),
+    rejected: info.rejected.map(String),
+  });
   return { messageId: info.messageId, response: info.response };
 }
+
+// Retry timing for failed hand-offs (core/delivery/attempts.ts): about 6 hours in total.
+const workerSettings = { backoffStrategy: (attemptsMade: number) => emailRetryDelay(attemptsMade) };
 
 export const emailWorker = new Worker<EmailJobData>(EMAIL_QUEUE_NAME, deliver, {
   connection: redisConnection,
   concurrency: 10,
+  settings: workerSettings,
+});
+
+// TredMail's own account, billing and alert mail, on its own queue so it never waits behind
+// a backlog of customer mail.
+export const systemEmailWorker = new Worker<EmailJobData>(SYSTEM_EMAIL_QUEUE_NAME, deliver, {
+  connection: redisConnection,
+  concurrency: 5,
+  settings: workerSettings,
 });
 
 const monitor = startMonitor();
 const webhookWorker = startWebhookWorker();
 
-emailWorker.on("completed", (job) => {
-  console.log(`[worker] sent ${job.id}`);
-});
-
 // BullMQ emits "failed" on every failed attempt, including ones that will be retried.
-emailWorker.on("failed", async (job, err) => {
+async function onFailed(job: Job<EmailJobData> | undefined, err: Error) {
   if (!job?.data?.emailId) return;
 
   const maxAttempts = job.opts.attempts ?? 1;
@@ -254,10 +358,15 @@ emailWorker.on("failed", async (job, err) => {
   } catch (recordErr) {
     console.error(`[worker] could not record failure for ${job.id}`, recordErr);
   }
-});
+}
+
+for (const worker of [emailWorker, systemEmailWorker]) {
+  worker.on("completed", (job) => console.log(`[worker] sent ${job.id}`));
+  worker.on("failed", (job, err) => void onFailed(job, err));
+}
 
 const shutdown = async () => {
-  await Promise.allSettled([emailWorker.close(), monitor.close(), webhookWorker.close()]);
+  await Promise.allSettled([emailWorker.close(), systemEmailWorker.close(), monitor.close(), webhookWorker.close()]);
   transporter.close();
   fallbackTransporter?.close();
   stagingTransporter?.close();

@@ -10,6 +10,7 @@ import { queueWebhookDelivery } from "@tredmail/core/webhooks/dispatcher";
 import { runBillingCycle } from "@tredmail/core/billing/cycle";
 import { reconcilePendingPayments } from "@tredmail/core/billing/service";
 import { checkCircuitBreakers } from "@tredmail/core/services/circuit-breaker";
+import { runDueDomainChecks } from "@tredmail/core/dns/domain-check";
 
 /**
  * Delivery health checks, every 15 minutes, emailed to OPS_EMAIL. Each alert type is sent at
@@ -231,11 +232,11 @@ export async function sweepOutbox(now = new Date()) {
         { status: "SCHEDULED", scheduledAt: { lt: stale } },
       ],
     },
-    select: { id: true, organizationId: true, domainId: true },
+    select: { id: true, organizationId: true, domainId: true, priority: true },
     take: 500,
   });
   for (const email of emails) {
-    await enqueueEmail({ emailId: email.id, organizationId: email.organizationId, domainId: email.domainId });
+    await enqueueEmail({ emailId: email.id, organizationId: email.organizationId, domainId: email.domainId }, null, email.priority);
   }
   const deliveries = await prisma.webhookDelivery.findMany({
     where: { status: "pending", nextAttemptAt: { lt: new Date(now.getTime() - 10 * 60_000) } },
@@ -247,8 +248,8 @@ export async function sweepOutbox(now = new Date()) {
 }
 
 /**
- * Schedules health checks, the outbox sweeper, the daily retention run, the billing cycle
- * and payment reconciliation (shared by all worker processes).
+ * Schedules health checks, the outbox sweeper, the daily retention run, the billing cycle,
+ * payment reconciliation and domain DNS checks (shared by all worker processes).
  */
 export function startMonitor() {
   const queue = new Queue(QUEUE, { connection: redisConnection });
@@ -258,6 +259,7 @@ export function startMonitor() {
     queue.upsertJobScheduler("data-retention", { pattern: "30 2 * * *", tz: "UTC" }, { name: "retention" }),
     queue.upsertJobScheduler("billing-cycle", { every: 10 * 60_000 }, { name: "billing" }),
     queue.upsertJobScheduler("payments-reconcile", { every: 60_000 }, { name: "reconcile" }),
+    queue.upsertJobScheduler("domain-checks", { every: 60_000 }, { name: "domains" }),
   ]).catch((err) => console.error("[monitor] could not schedule maintenance jobs", err));
   const worker = new Worker(
     QUEUE,
@@ -266,6 +268,7 @@ export function startMonitor() {
       if (job.name === "outbox") return sweepOutbox();
       if (job.name === "billing") return runBillingCycle();
       if (job.name === "reconcile") return reconcilePendingPayments();
+      if (job.name === "domains") return env.DOMAIN_AUTO_CHECKS ? runDueDomainChecks() : "disabled";
       return (await runHealthChecks()).map((a) => a.key);
     },
     { connection: redisConnection },

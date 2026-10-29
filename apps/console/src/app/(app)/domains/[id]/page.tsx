@@ -16,6 +16,9 @@ interface DomainDetail {
   created_at: string;
   verified_at: string | null;
   last_checked_at: string | null;
+  next_check_at: string | null;
+  failing_since: string | null;
+  last_check_error: string | null;
   records: DnsRecord[];
 }
 
@@ -85,7 +88,8 @@ function DomainDetailPageContent() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const autoChecks = useRef(0);
 
-  const verified = domain?.status === "verified";
+  // Degraded domains still send: a re-check failed and the owner has 72 hours to fix it.
+  const verified = domain?.status === "verified" || domain?.status === "degraded";
 
   async function verify() {
     setChecking(true);
@@ -173,6 +177,18 @@ function DomainDetailPageContent() {
         }
       />
       {verifyError && <div className="mb-4"><Alert tone="danger">{verifyError}</Alert></div>}
+      {(domain.status === "degraded" || domain.status === "failed") && (
+        <div className="mb-4">
+          <Alert tone={domain.status === "failed" ? "danger" : "warning"}>
+            <p className="font-semibold">
+              {domain.status === "failed"
+                ? "Sending from this domain has stopped: its DNS records have failed verification for 72 hours. Queued email is held and sent once the records pass again."
+                : `This domain's DNS records are failing${domain.failing_since ? ` (since ${formatDate(domain.failing_since)})` : ""}. Email is still being sent, but fix the records within 72 hours or sending stops.`}
+            </p>
+            {domain.last_check_error && <p className="mt-1 whitespace-pre-line text-xs">{domain.last_check_error}</p>}
+          </Alert>
+        </div>
+      )}
 
       <div className="space-y-4">
         <Step n={1} title="Add these records at your DNS provider" done={requiredDone} active={!requiredDone}>
@@ -224,11 +240,11 @@ function DomainDetailPageContent() {
               <p className="text-sm text-muted">Ask a workspace Owner or Admin to verify the domain.</p>
             )}
             <p className="text-sm text-muted">
-              {verified
-                ? "All required records were found."
-                : `DNS changes usually appear within 30 minutes. This page re-checks every minute while it is open.${
+              {domain.status === "verified"
+                ? `All required records were found. TredMail re-checks them daily and emails you if they stop passing.`
+                : `DNS changes usually appear within 30 minutes. TredMail checks automatically and emails the workspace's Owners and Admins when the domain is verified.${
                     domain.last_checked_at ? ` Last checked ${formatDate(domain.last_checked_at)}.` : ""
-                  }`}
+                  }${domain.next_check_at ? ` Next check ${formatDate(domain.next_check_at)}.` : ""}`}
             </p>
           </div>
         </Step>

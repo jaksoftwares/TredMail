@@ -40,7 +40,7 @@ const optionalInt = z.number().int().min(0).nullable().optional();
 
 const planInputSchema = z.object({
   plan: z.string().min(1),
-  interval: intervalSchema.default("month"),
+  interval: intervalSchema.prefault("month"),
   custom_price: optionalInt,
   custom_monthly_emails: optionalInt,
   custom_daily_emails: optionalInt,
@@ -236,7 +236,7 @@ export async function adminRoutes(fastify: FastifyInstance) {
   // POST /v1/admin/workspaces/:id/plan - Set plan and custom terms without charging
   fastify.post<{ Params: { id: string } }>("/workspaces/:id/plan", async (request, reply) => {
     const parsed = planInputSchema.safeParse(request.body);
-    if (!parsed.success) return bad(reply, parsed.error.errors);
+    if (!parsed.success) return bad(reply, parsed.error.issues);
     const d = parsed.data;
     const result = await staffSetPlan(
       request.params.id,
@@ -258,7 +258,7 @@ export async function adminRoutes(fastify: FastifyInstance) {
   // POST /v1/admin/workspaces/:id/suspend | /unsuspend | /resume-sending
   fastify.post<{ Params: { id: string } }>("/workspaces/:id/suspend", async (request, reply) => {
     const parsed = z.object({ reason: z.string().trim().min(3).max(300) }).safeParse(request.body);
-    if (!parsed.success) return bad(reply, parsed.error.errors);
+    if (!parsed.success) return bad(reply, parsed.error.issues);
     return send(reply, await setSuspension(request.params.id, true, parsed.data.reason, staffId(request)));
   });
   fastify.post<{ Params: { id: string } }>("/workspaces/:id/unsuspend", async (request, reply) =>
@@ -271,7 +271,7 @@ export async function adminRoutes(fastify: FastifyInstance) {
   // POST /v1/admin/workspaces/:id/credit - Add (or remove, negative) account credit
   fastify.post<{ Params: { id: string } }>("/workspaces/:id/credit", async (request, reply) => {
     const parsed = z.object({ amount: z.number().int().refine((n) => n !== 0), reason: z.string().trim().min(3).max(300) }).safeParse(request.body);
-    if (!parsed.success) return bad(reply, parsed.error.errors);
+    if (!parsed.success) return bad(reply, parsed.error.issues);
     return send(reply, await adjustCredit(request.params.id, parsed.data.amount, parsed.data.reason, staffId(request)));
   });
 
@@ -285,7 +285,7 @@ export async function adminRoutes(fastify: FastifyInstance) {
         lines: z.array(z.object({ description: z.string().trim().min(1).max(200), quantity: z.number().int().min(1).default(1), unit_amount: z.number().int() })).min(1).max(20),
       })
       .safeParse(request.body);
-    if (!parsed.success) return bad(reply, parsed.error.errors);
+    if (!parsed.success) return bad(reply, parsed.error.issues);
     const d = parsed.data;
     const result = await createManualInvoice(
       request.params.id,
@@ -338,7 +338,7 @@ export async function adminRoutes(fastify: FastifyInstance) {
         note: z.string().trim().max(300).optional(),
       })
       .safeParse(request.body);
-    if (!parsed.success) return bad(reply, parsed.error.errors);
+    if (!parsed.success) return bad(reply, parsed.error.issues);
     const d = parsed.data;
     const result = await recordManualPayment(
       { organizationId: d.organization_id, invoiceId: d.invoice_id, amount: d.amount, currency: d.currency, method: d.method, reference: d.reference, note: d.note },
@@ -350,14 +350,14 @@ export async function adminRoutes(fastify: FastifyInstance) {
   // POST /v1/admin/payments/:id/assign - Attach an unmatched payment to a workspace
   fastify.post<{ Params: { id: string } }>("/payments/:id/assign", async (request, reply) => {
     const parsed = z.object({ organization_id: z.string().min(1), invoice_id: z.string().min(1).nullable().optional() }).safeParse(request.body);
-    if (!parsed.success) return bad(reply, parsed.error.errors);
+    if (!parsed.success) return bad(reply, parsed.error.issues);
     return send(reply, await assignPayment(request.params.id, parsed.data.organization_id, parsed.data.invoice_id ?? null, staffId(request)));
   });
 
   // POST /v1/admin/payments/:id/refund - Record a refund made in the provider's portal
   fastify.post<{ Params: { id: string } }>("/payments/:id/refund", async (request, reply) => {
     const parsed = z.object({ reason: z.string().trim().min(3).max(300) }).safeParse(request.body);
-    if (!parsed.success) return bad(reply, parsed.error.errors);
+    if (!parsed.success) return bad(reply, parsed.error.issues);
     return send(reply, await refundPayment(request.params.id, parsed.data.reason, staffId(request)));
   });
 
@@ -391,7 +391,7 @@ export async function adminRoutes(fastify: FastifyInstance) {
 
   fastify.post("/plans", async (request, reply) => {
     const parsed = planEditSchema.extend({ id: z.string().regex(/^[a-z0-9_-]{2,30}$/), name: z.string().trim().min(1).max(40), monthly_emails: z.number().int().min(0) }).safeParse(request.body);
-    if (!parsed.success) return bad(reply, parsed.error.errors);
+    if (!parsed.success) return bad(reply, parsed.error.issues);
     const exists = await prisma.plan.findUnique({ where: { id: parsed.data.id } });
     if (exists) return reply.status(409).send({ statusCode: 409, error: "plan_exists", message: `A plan '${parsed.data.id}' already exists.` });
     const plan = await prisma.plan.create({ data: { ...(planData(parsed.data) as Prisma.PlanCreateInput), id: parsed.data.id, name: parsed.data.name, monthlyEmails: parsed.data.monthly_emails } });
@@ -400,7 +400,7 @@ export async function adminRoutes(fastify: FastifyInstance) {
 
   fastify.patch<{ Params: { id: string } }>("/plans/:id", async (request, reply) => {
     const parsed = planEditSchema.safeParse(request.body);
-    if (!parsed.success) return bad(reply, parsed.error.errors);
+    if (!parsed.success) return bad(reply, parsed.error.issues);
     const exists = await prisma.plan.findUnique({ where: { id: request.params.id } });
     if (!exists) return reply.status(404).send({ statusCode: 404, error: "not_found", message: "Plan not found." });
     const plan = await prisma.plan.update({ where: { id: request.params.id }, data: planData(parsed.data) });

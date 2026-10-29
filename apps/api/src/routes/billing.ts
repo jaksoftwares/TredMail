@@ -21,7 +21,7 @@ import { recordAudit } from "@tredmail/core/services/audit";
 import { auditActor, authenticate, requireBillingOwner, requireBillingViewer } from "../middleware/auth.js";
 
 const intervalSchema = z.enum(["month", "year"]).transform((v) => (v === "year" ? "YEAR" : "MONTH") as "MONTH" | "YEAR");
-const changeSchema = z.object({ plan: z.string().min(1).max(40), interval: intervalSchema.default("month") });
+const changeSchema = z.object({ plan: z.string().min(1).max(40), interval: intervalSchema.prefault("month") });
 
 const accountSchema = z.object({
   billing_email: z.string().trim().toLowerCase().email().max(200).nullable().optional(),
@@ -35,7 +35,7 @@ const accountSchema = z.object({
   auto_collect: z.boolean().optional(),
 });
 
-const paySchema = z.object({ gateway: z.string().min(1).max(40), payer: z.record(z.string().max(200)).default({}) });
+const paySchema = z.object({ gateway: z.string().min(1).max(40), payer: z.record(z.string(), z.string().max(200)).default({}) });
 
 const bad = (details: unknown, message = "Invalid request.") => ({ statusCode: 400, error: "validation_error", message, details });
 const empty = (v: string | null | undefined) => (v === undefined ? undefined : v || null);
@@ -87,7 +87,7 @@ export async function billingRoutes(fastify: FastifyInstance) {
   // POST /v1/billing/preview - What a plan change would cost and when it applies
   fastify.post("/billing/preview", async (request, reply) => {
     const parsed = changeSchema.safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send(bad(parsed.error.errors));
+    if (!parsed.success) return reply.status(400).send(bad(parsed.error.issues));
     const preview = await previewPlanChange(request.organization!.id, parsed.data.plan, parsed.data.interval);
     if (!preview.ok) return reply.status(preview.statusCode).send({ statusCode: preview.statusCode, error: preview.error, message: preview.message });
     return {
@@ -110,7 +110,7 @@ export async function billingRoutes(fastify: FastifyInstance) {
   // POST /v1/billing/subscription - Change plan: upgrades return an invoice to pay
   fastify.post("/billing/subscription", { preHandler: requireBillingOwner }, async (request, reply) => {
     const parsed = changeSchema.safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send(bad(parsed.error.errors));
+    if (!parsed.success) return reply.status(400).send(bad(parsed.error.issues));
     const actor = auditActor(request);
     const result = await changePlan(request.organization!.id, parsed.data.plan, parsed.data.interval, { userId: actor.actorId, ip: request.ip });
     if (!result.ok) return reply.status(result.statusCode).send({ statusCode: result.statusCode, error: result.error, message: result.message });
@@ -130,7 +130,7 @@ export async function billingRoutes(fastify: FastifyInstance) {
   // PUT /v1/billing/account - Billing details and the M-Pesa number for payment requests
   fastify.put("/billing/account", { preHandler: requireBillingOwner }, async (request, reply) => {
     const parsed = accountSchema.safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send(bad(parsed.error.errors));
+    if (!parsed.success) return reply.status(400).send(bad(parsed.error.issues));
     const d = parsed.data;
     let phone: string | null | undefined = empty(d.phone);
     if (phone) {
@@ -184,7 +184,7 @@ export async function billingRoutes(fastify: FastifyInstance) {
   // POST /v1/billing/invoices/:id/pay - Start a payment (M-Pesa: sends the PIN prompt)
   fastify.post<{ Params: { id: string } }>("/billing/invoices/:id/pay", async (request, reply) => {
     const parsed = paySchema.safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send(bad(parsed.error.errors));
+    if (!parsed.success) return reply.status(400).send(bad(parsed.error.issues));
     const result = await startPayment(request.organization!.id, request.params.id, parsed.data.gateway, parsed.data.payer, {
       userId: auditActor(request).actorId,
     });

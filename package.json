@@ -1,6 +1,6 @@
 {
   "name": "tredmail",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "private": true,
   "description": "TredMail transactional email platform by Dovepeak Technologies",
   "workspaces": [
@@ -18,7 +18,7 @@
     "dev:all": "concurrently -n api,worker,console \"npm run dev:api\" \"npm run dev:worker\" \"npm run dev:console\"",
     "build": "npm run build -w @tredmail/api -w @tredmail/worker -w @tredmail/smtp-relay",
     "typecheck": "tsc -p tsconfig.check.json",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:smoke": "tsx scripts/smoke-test.ts",

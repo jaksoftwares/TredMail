@@ -44,7 +44,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance) {
         statusCode: 400,
         error: "validation_error",
         message: "Invalid API key request.",
-        details: parseResult.error.errors,
+        details: parseResult.error.issues,
       });
     }
 

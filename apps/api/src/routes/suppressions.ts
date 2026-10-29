@@ -43,7 +43,7 @@ export async function suppressionRoutes(fastify: FastifyInstance) {
         statusCode: 400,
         error: "validation_error",
         message: "Invalid suppression data.",
-        details: parseResult.error.errors,
+        details: parseResult.error.issues,
       });
     }
 
