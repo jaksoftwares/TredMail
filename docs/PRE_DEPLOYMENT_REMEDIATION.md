@@ -452,9 +452,9 @@ All of the following must hold on staging, then be repeated on production before
 - [x] B5 automatic domain checks
 
 **Phase 3:**
-- [ ] B4 out-of-band alerts and heartbeat
-- [ ] H5 automated backups
-- [ ] M10 seed role reset
+- [x] B4 out-of-band alerts and heartbeat
+- [x] H5 automated backups
+- [x] M10 seed role reset
 
 **Phase 4:**
 - [ ] H3 M-Pesa allowlist
@@ -564,3 +564,35 @@ failed.
 
   Verified against real DNS: a seeded domain without TredMail's records went from `VERIFIED`
   to `DEGRADED`, with an audit entry and notices queued to its Owner and Admin.
+
+### Phase 3 (29 October 2026)
+
+- **B4.** `packages/core/src/services/ops-alerts.ts` sends every operations alert (delivery
+  health, blocklists, paused workspaces, unmatched payments) to `ALERT_WEBHOOK_URL` (new; Slack,
+  Mattermost, Discord or Google Chat) and to `OPS_EMAIL`, emailed through `FALLBACK_SMTP_*`
+  when set so it does not depend on KumoMTA. The worker writes a heartbeat to Redis every
+  minute; `GET /health/worker` returns 503 when it is over 5 minutes old. It is a separate
+  endpoint, not part of `/health/ready`, because the worker container waits for the API to be
+  healthy and tying the two together would deadlock a fresh deploy. The worker warns at start
+  when no independent alert channel is configured. Runbook 6.6 describes the uptime monitor.
+- **H5.** `scripts/backup.sh` (nightly cron installed by the deploy script): dump, readability
+  check, age encryption of the dump and of `.env` to a public key (the server cannot decrypt
+  its own backups), rclone upload of the encrypted copies only, 14-day local retention, and a
+  chat alert on failure. `scripts/restore.sh` restores into a scratch database for drills or,
+  with `--yes`, replaces the live one. The new `check-keys` CLI proves the restored DKIM keys
+  decrypt with the master key. Runbook 6.3 rewritten; go-live checklist updated.
+- **M10.** The seed creates the admin's membership once and no longer resets its role.
+
+Also fixed: since Phase 2 the seed CLI imported the domain-check service, whose mail and queue
+imports open a Redis connection, so `seed.js` never exited and would have hung the deploy
+script. The pure scheduling rules now live in `dns/domain-schedule.ts`. Every CLI the deploy
+and runbook use (seed, check-keys, staff, revoke-api-key, payments-setup) was checked to exit
+on its own.
+
+Verified on a development machine: with KumoMTA stopped, a test alert reached a chat webhook
+and the ops mailbox (via the fallback path); `/health/worker` answered 503 before the worker
+started and 200 after; a backup of the development database was written and checked, restored
+into a scratch database (12 workspaces, 5 domains, 141 emails) and `check-keys` passed with the
+right master key and failed with a wrong one; the seed kept a changed role. Not yet exercised:
+the age encryption and rclone upload steps (no binaries on the development machine); they are
+part of the staging restore drill in the release gate.

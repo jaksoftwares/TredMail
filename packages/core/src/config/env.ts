@@ -75,6 +75,9 @@ const envSchema = z
     // Where operational mail goes: alerts, and mail sent to postmaster@, abuse@, dmarc@ and
     // other addresses at PRIMARY_DOMAIN. Unset = alerts are only logged and inbound mail is dropped.
     OPS_EMAIL: z.string().email().optional(),
+    // Chat webhook (Slack, Mattermost, Discord, Google Chat) that receives every operations
+    // alert. Unlike email it does not depend on TredMail's own mail server being healthy.
+    ALERT_WEBHOOK_URL: z.preprocess((val) => (val === "" ? undefined : val), z.string().url().optional()),
     // At most this many inbound messages are forwarded to OPS_EMAIL per day (spam protection).
     INBOUND_FORWARD_DAILY_LIMIT: z.coerce.number().int().min(0).default(200),
     // First day (YYYY-MM-DD, UTC) of IP warm-up. Unset = no warm-up cap.

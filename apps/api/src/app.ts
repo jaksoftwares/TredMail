@@ -6,6 +6,7 @@ import { TREDMAIL_VERSION } from "@tredmail/core/config/version";
 import { prisma } from "@tredmail/db";
 import { redisConnection } from "@tredmail/core/queue/redis";
 import { hashApiKey } from "@tredmail/core/security/api-keys";
+import { readWorkerHealth } from "@tredmail/core/services/heartbeat";
 import { authenticate, requireScope } from "./middleware/auth.js";
 import { emailRoutes, sendBatch } from "./routes/emails.js";
 import { domainRoutes } from "./routes/domains.js";
@@ -64,6 +65,13 @@ export async function buildServer(options: BuildOptions = {}) {
     const [database, redis] = checks.map((c) => (c.status === "fulfilled" ? "ok" : "down"));
     const ready = database === "ok" && redis === "ok";
     return reply.status(ready ? 200 : 503).send({ status: ready ? "ready" : "degraded", database, redis });
+  });
+  // For the external uptime monitor: 503 when the delivery worker has not reported in 5
+  // minutes. Kept out of /health/ready, which gates container start-up order.
+  fastify.get("/health/worker", async (_request, reply) => {
+    const health = await readWorkerHealth(redisConnection).catch(() => null);
+    if (!health) return reply.status(503).send({ status: "unknown", error: "redis_unreachable" });
+    return reply.status(health.status === "ok" ? 200 : 503).send(health);
   });
 
   // Authenticated API, rate limited per API key (per IP when no key is sent).

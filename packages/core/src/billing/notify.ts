@@ -9,7 +9,8 @@ import {
   usageWarningTemplate,
   type PaybillDetails,
 } from "../mail/billing-templates.js";
-import { operationsAlertTemplate, type RenderedEmail } from "../mail/templates.js";
+import { type RenderedEmail } from "../mail/templates.js";
+import { sendOpsAlert } from "../services/ops-alerts.js";
 import { sendSystemEmail } from "../services/system-mailer.js";
 import { maskPhone } from "./gateways/phone.js";
 import { allGateways, getGateway } from "./gateways/registry.js";
@@ -180,11 +181,5 @@ export async function notifyUsage(
 
 /** Billing problems staff must look at (unmatched Paybill payments, gateway failures). */
 export async function notifyOps(title: string, summary: string, details: string[]) {
-  console.warn(`[billing] ${title}: ${summary}`);
-  if (!env.OPS_EMAIL) return;
-  try {
-    await sendSystemEmail(env.OPS_EMAIL, operationsAlertTemplate({ title, summary, details }));
-  } catch (err) {
-    console.error("[billing] could not send ops alert", err);
-  }
+  await sendOpsAlert({ title, summary, details });
 }

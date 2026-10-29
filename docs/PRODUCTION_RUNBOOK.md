@@ -435,27 +435,49 @@ Where to look first:
 
 ### 6.3 Backups (set this up on day one)
 
-Back up the database every night and keep 14 days. Create `/etc/cron.d/tredmail-backup`
-with this content:
+The deploy script installs a nightly backup (`/etc/cron.d/tredmail-backup`, 01:30 UTC) that
+runs `scripts/backup.sh`. Each run dumps the database, checks the dump can be read, keeps 14
+days on the server (`/var/backups/tredmail`), and, once configured, encrypts the dump and a
+copy of `.env` and copies them off the server. A failed run is posted to `ALERT_WEBHOOK_URL`.
+The log is `/var/log/tredmail-backup.log`; `last-success` in the backup folder holds the time
+of the last good run.
 
-```
-30 1 * * * root cd /opt/tredmail && mkdir -p /var/backups/tredmail && docker compose -f docker-compose.prod.yml --env-file .env -p tredmail-production exec -T postgres pg_dump -U tredmail -Fc tredmail > /var/backups/tredmail/tredmail-$(date +\%F).dump && find /var/backups/tredmail -name '*.dump' -mtime +14 -delete
-```
+**Set up off-server copies once** (until you do, the deploy script warns on every deploy):
 
-**Also:**
-- Copy the dumps off the server, for example to Hostinger backups, an S3 bucket or Google
-  Drive, with `rclone`. A backup kept only on the same disk does not survive the server.
-- Keep `.env` in your password manager. Without its `TREDMAIL_MASTER_ENCRYPTION_KEY`, a
-  database backup cannot decrypt the DKIM keys.
-- Turn on Hostinger's weekly VPS snapshots as a second layer.
+1. On your own computer (not the server), create an encryption key pair with
+   [age](https://age-encryption.org): `age-keygen -o tredmail-backup.key`. Store the file in
+   the password manager. It prints the public key (`age1...`).
+2. On the server, set `BACKUP_AGE_RECIPIENT=age1...` in `.env`. The server can encrypt
+   backups but never decrypt them.
+3. Configure a storage remote with `sudo rclone config` (Backblaze B2, S3, Google Drive...),
+   then set `BACKUP_RCLONE_REMOTE=<remote>:<bucket>/production` in `.env`.
+4. Run `sudo ./scripts/backup.sh` once and check the files arrive in the bucket.
 
-**Restore** (onto a fresh server deployed with the **same** `.env`):
+Unencrypted copies never leave the server. The `.env` copy matters as much as the database:
+without its `TREDMAIL_MASTER_ENCRYPTION_KEY` the stored DKIM keys cannot be decrypted. Also
+keep `.env` in the password manager, and turn on Hostinger's weekly VPS snapshots as a second
+layer.
+
+**Restore drill (monthly):** restore the latest dump into a scratch database and check it:
 
 ```bash
-$DC up -d postgres
-$DC exec -T postgres pg_restore -U tredmail -d tredmail --clean --if-exists < tredmail-YYYY-MM-DD.dump
-$DC up -d
+sudo ./scripts/restore.sh /var/backups/tredmail/tredmail-<stamp>.dump --into tredmail_restore_test
 ```
+
+It prints what was restored and runs `check-keys`, which proves the DKIM keys decrypt with
+this server's master key. Drop the scratch database afterwards (the script prints how).
+
+**Disaster recovery** (onto a fresh server deployed with the same `.env`, restored from its
+encrypted copy):
+
+```bash
+rclone copy <remote>:<bucket>/production/tredmail-<stamp>.dump.age .
+BACKUP_AGE_IDENTITY=/root/tredmail-backup.key sudo -E ./scripts/restore.sh tredmail-<stamp>.dump.age --yes
+shred -u /root/tredmail-backup.key
+```
+
+With `--yes` it stops the API, worker and relay, replaces the live database, checks the keys,
+applies newer migrations and starts everything again.
 
 ### 6.4 Routine tasks
 
@@ -472,6 +494,7 @@ $DC up -d
 | Change plan prices | Back-office → Plans (applies to new invoices) |
 | Certificates | Automatic: Caddy renews them, and `cert-sync.sh` (cron, 03:17 and 15:17) passes them to KumoMTA and the relay |
 | Disk space | `df -h`; `docker system prune -f` removes old images after deploys |
+| Check the stored keys decrypt (after a restore or key change) | `$DC run --rm --no-deps api node apps/api/dist/cli/check-keys.js` |
 
 ### 6.5 Scaling notes
 
@@ -481,6 +504,31 @@ $DC up -d
 - **Add a second sending IP** for free and new accounts before opening public sign-ups widely,
   so one bad customer cannot affect Dovepeak's own reputation.
 - Staging needs **its own server**: both stacks bind ports 80 and 443.
+
+### 6.6 Alerts and uptime monitoring
+
+TredMail's own email can fail exactly when an alert matters most (KumoMTA down, the IP
+blocklisted), so alerts also go out through channels that do not depend on it:
+
+- **`ALERT_WEBHOOK_URL`** (recommended): a Slack, Mattermost, Discord or Google Chat incoming
+  webhook. Every operations alert is posted there: delivery health, blocklists, paused
+  workspaces, unmatched payments and failed backups.
+- **`OPS_EMAIL`** is still emailed. When `FALLBACK_SMTP_*` is set, alert email goes through
+  that provider instead of TredMail itself.
+
+The worker warns at start-up when neither independent channel is configured.
+
+**External uptime monitor (required).** Something outside the server must notice when the
+whole server, the API or the worker stops. Use a hosted monitor (UptimeRobot, Better Stack or
+similar, free tiers are enough), alerting to the same channel, with these checks every
+5 minutes:
+
+| Check | URL | Healthy |
+| --- | --- | --- |
+| API and its database and Redis | `https://api.tredmail.dovepeakdigital.com/health/ready` | HTTP 200 |
+| Delivery worker | `https://api.tredmail.dovepeakdigital.com/health/worker` | HTTP 200 (503 when the worker has not reported for 5 minutes) |
+| Console | `https://console.tredmail.dovepeakdigital.com/sign-in` | HTTP 200 |
+| Mail server | TCP port 25 on `mta1.tredmail.dovepeakdigital.com` | open |
 
 ---
 
@@ -549,7 +597,8 @@ closed and its release gate (section 5) has passed on staging.
 - [ ] `.env` completed: `OPS_EMAIL`, M-Pesa, billing; `$DC up -d`; `payments-setup` run
 - [ ] Health, PTR, and the `mta1` and `smtp` certificates verified (4.6), then records 17 and 18 added
 - [ ] Owner password changed, 2FA on, domains verified, test email received with DKIM pass
-- [ ] Nightly database backup cron installed, and copies leave the server
+- [ ] Backups: `BACKUP_AGE_RECIPIENT` and `BACKUP_RCLONE_REMOTE` set, encrypted copies seen in the bucket, a restore drill passed (6.3)
+- [ ] Alerts: `ALERT_WEBHOOK_URL` set and a test alert received; uptime monitor watching `/health/ready`, `/health/worker`, the console and port 25 (6.6)
 - [ ] Live M-Pesa payment and refund tested
 - [ ] Production M-Pesa keys removed from developer machines
 - [ ] Dovepeak applications moved one by one; old providers cancelled after a clean week

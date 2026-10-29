@@ -30,6 +30,8 @@ x-backend-env: &backend-env
   MTA_HOSTNAME: ${MTA_HOSTNAME:-mta1.tredmail.dovepeakdigital.com}
   # Alerts and forwarded postmaster@/abuse@/dmarc@ mail go here
   OPS_EMAIL: ${OPS_EMAIL:-}
+  # Chat webhook that receives every operations alert, independently of TredMail's own mail
+  ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
   # First day of IP warm-up (YYYY-MM-DD); leave empty once warm-up is over
   MTA_WARMUP_START: ${MTA_WARMUP_START:-}
   # Optional backup provider for mail above the warm-up cap

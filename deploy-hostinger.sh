@@ -6,16 +6,18 @@
 
 set -e
 
-echo "🚀 Starting TredMail Production Deployment on Hostinger KVM..."
+echo " Starting TredMail Production Deployment on Hostinger KVM..."
 
 # 1. Update OS packages
-echo "📦 Updating Ubuntu package repositories..."
+echo " Updating Ubuntu package repositories..."
 sudo apt-get update -y && sudo apt-get upgrade -y
 sudo apt-get install -y curl git ufw jq dnsutils
+# age encrypts backups before rclone copies them off the server (scripts/backup.sh)
+sudo apt-get install -y age rclone
 
 # 2. Install Docker & Docker Compose if not present
 if ! command -v docker &> /dev/null; then
-    echo "🐳 Installing Docker Engine..."
+    echo " Installing Docker Engine..."
     curl -fsSL https://get.docker.com -o get-docker.sh
     sudo sh get-docker.sh
     sudo usermod -aG docker $USER
@@ -117,6 +119,11 @@ if [ ! -f "$ENV_FILE" ]; then
             echo "# SMTP relay hostname (its A record must point here) and MTA-STS mode (testing, then enforce)"
             echo "SMTP_RELAY_HOSTNAME=${SMTP_RELAY_HOSTNAME:-smtp.tredmail.dovepeakdigital.com}"
             echo "MTA_STS_MODE=testing"
+            echo "# Operations alerts that do not depend on TredMail's own mail server (Slack/Discord/Chat webhook)"
+            echo "ALERT_WEBHOOK_URL="
+            echo "# Nightly backups (scripts/backup.sh): age public key, and the rclone remote for off-server copies"
+            echo "BACKUP_AGE_RECIPIENT="
+            echo "BACKUP_RCLONE_REMOTE="
         fi
     } > "$ENV_FILE"
     echo "🔑 Generated encryption key, internal token, session secret and database password."
@@ -138,6 +145,17 @@ if [ "$STAGE" = "production" ]; then
     ./scripts/cert-sync.sh "tredmail-$STAGE" || true
     echo "17 3,15 * * * root cd $(pwd) && ./scripts/cert-sync.sh tredmail-$STAGE >> /var/log/tredmail-cert-sync.log 2>&1" | sudo tee /etc/cron.d/tredmail-cert-sync > /dev/null
     echo "🔐 Certificate sync scheduled (/etc/cron.d/tredmail-cert-sync)"
+
+    # Nightly database backup at 01:30 UTC (scripts/backup.sh)
+    chmod +x scripts/backup.sh scripts/restore.sh
+    echo "30 1 * * * root cd $(pwd) && ./scripts/backup.sh tredmail-$STAGE >> /var/log/tredmail-backup.log 2>&1" | sudo tee /etc/cron.d/tredmail-backup > /dev/null
+    echo "💾 Nightly backup scheduled (/etc/cron.d/tredmail-backup)"
+    if ! grep -qE '^BACKUP_AGE_RECIPIENT=.+' "$ENV_FILE" || ! grep -qE '^BACKUP_RCLONE_REMOTE=.+' "$ENV_FILE"; then
+        echo "⚠️ WARNING: backups stay on this server until BACKUP_AGE_RECIPIENT and BACKUP_RCLONE_REMOTE are set in $ENV_FILE (runbook 6.3)."
+    fi
+    if ! grep -qE '^ALERT_WEBHOOK_URL=.+' "$ENV_FILE" && ! grep -qE '^FALLBACK_SMTP_HOST=.+' "$ENV_FILE"; then
+        echo "⚠️ WARNING: alerts can only be emailed through TredMail itself. Set ALERT_WEBHOOK_URL (runbook 6.6)."
+    fi
 fi
 
 # 8. Seed the platform and Dovepeak workspaces (prints an owner password and an API key once)

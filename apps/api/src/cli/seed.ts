@@ -20,7 +20,7 @@ import { generateApiKey } from "@tredmail/core/security/api-keys";
 import { encryptSecret } from "@tredmail/core/security/crypto";
 import { generateDkimKeypair } from "@tredmail/core/security/dkim-keys";
 import { generateExpectedDnsRecords } from "@tredmail/core/dns/generator";
-import { firstCheckAt } from "@tredmail/core/dns/domain-check";
+import { firstCheckAt } from "@tredmail/core/dns/domain-schedule";
 import { ensureSubscription } from "@tredmail/core/billing/subscriptions";
 import { INTERNAL_PLAN_ID } from "@tredmail/core/billing/plans";
 
@@ -92,10 +92,12 @@ async function ensureAdmin(workspaceIds: string[]) {
     });
   }
 
+  // Joins the admin as Owner the first time only: the seed runs on every deploy and must not
+  // undo a role change made in the console since.
   for (const organizationId of workspaceIds) {
     await prisma.organizationMember.upsert({
       where: { organizationId_userId: { organizationId, userId: user.id } },
-      update: { role: "OWNER" },
+      update: {},
       create: { organizationId, userId: user.id, role: "OWNER" },
     });
   }

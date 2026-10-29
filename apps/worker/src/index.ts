@@ -21,6 +21,8 @@ import {
   recoveryDecision,
   type SendErrorLike,
 } from "@tredmail/core/delivery/attempts";
+import { HEARTBEAT_EVERY_MS, writeHeartbeat } from "@tredmail/core/services/heartbeat";
+import { independentAlertChannels } from "@tredmail/core/services/ops-alerts";
 import { startMonitor } from "./monitor.js";
 import { startWebhookWorker } from "./webhooks.js";
 
@@ -319,6 +321,11 @@ export const systemEmailWorker = new Worker<EmailJobData>(SYSTEM_EMAIL_QUEUE_NAM
 });
 
 const monitor = startMonitor();
+
+// Reported by GET /health/worker for the external uptime monitor
+const beat = () => writeHeartbeat(redisConnection).catch((err) => console.error("[worker] heartbeat failed", err));
+void beat();
+const heartbeatTimer = setInterval(beat, HEARTBEAT_EVERY_MS);
 const webhookWorker = startWebhookWorker();
 
 // BullMQ emits "failed" on every failed attempt, including ones that will be retried.
@@ -366,6 +373,7 @@ for (const worker of [emailWorker, systemEmailWorker]) {
 }
 
 const shutdown = async () => {
+  clearInterval(heartbeatTimer);
   await Promise.allSettled([emailWorker.close(), systemEmailWorker.close(), monitor.close(), webhookWorker.close()]);
   transporter.close();
   fallbackTransporter?.close();
@@ -382,3 +390,10 @@ console.log(
     `warm-up ${cap === null ? "off" : `cap ${cap}/day`}; fallback ${fallbackTransporter ? env.FALLBACK_SMTP_HOST : "none"}` +
     `${stagingTransporter ? `; staging delivery to ${stagingAllowlist.length} allowlisted entries` : ""})`,
 );
+const alertChannels = independentAlertChannels();
+if (alertChannels.length === 0 && env.NODE_ENV === "production") {
+  console.warn(
+    "[worker] Operations alerts can only go out through TredMail's own mail server, so an outage there would go unreported. " +
+      "Set ALERT_WEBHOOK_URL, or FALLBACK_SMTP_HOST with OPS_EMAIL.",
+  );
+}

@@ -3,8 +3,7 @@ import { Queue, Worker } from "bullmq";
 import { prisma } from "@tredmail/db";
 import { env } from "@tredmail/core/config/env";
 import { redisConnection } from "@tredmail/core/queue/redis";
-import { operationsAlertTemplate } from "@tredmail/core/mail/templates";
-import { sendSystemEmail } from "@tredmail/core/services/system-mailer";
+import { sendOpsAlert } from "@tredmail/core/services/ops-alerts";
 import { enqueueEmail } from "@tredmail/core/queue/email.queue";
 import { queueWebhookDelivery } from "@tredmail/core/webhooks/dispatcher";
 import { runBillingCycle } from "@tredmail/core/billing/cycle";
@@ -160,13 +159,7 @@ async function blocklistAlerts(): Promise<Alert[]> {
 async function notify(alert: Alert) {
   const fresh = await redisConnection.set(`tredmail:alert:${alert.key}`, "1", "EX", ALERT_COOLDOWN_SECONDS, "NX");
   if (fresh !== "OK") return;
-  console.warn(`[monitor] ALERT ${alert.title}: ${alert.summary}`);
-  if (!env.OPS_EMAIL) return;
-  try {
-    await sendSystemEmail(env.OPS_EMAIL, operationsAlertTemplate(alert));
-  } catch (err) {
-    console.error("[monitor] could not send alert email", err);
-  }
+  await sendOpsAlert(alert);
 }
 
 export async function runHealthChecks(): Promise<Alert[]> {

@@ -1,7 +1,7 @@
 import { prisma } from "@tredmail/db";
 import { env } from "../config/env.js";
 import { sendingPausedTemplate } from "../mail/billing-templates.js";
-import { operationsAlertTemplate } from "../mail/templates.js";
+import { sendOpsAlert } from "./ops-alerts.js";
 import { billingRecipients } from "../billing/subscriptions.js";
 import { recordAudit } from "./audit.js";
 import { sendSystemEmail } from "./system-mailer.js";
@@ -65,16 +65,11 @@ export async function checkCircuitBreakers(now = new Date()): Promise<string[]> 
     for (const to of await billingRecipients(row.organizationId)) {
       await sendSystemEmail(to, sendingPausedTemplate({ workspace: row.name, reason, url })).catch((err) => console.error("[breaker] owner email failed", err));
     }
-    if (env.OPS_EMAIL) {
-      await sendSystemEmail(
-        env.OPS_EMAIL,
-        operationsAlertTemplate({
-          title: `Sending paused for ${row.name}`,
-          summary: reason,
-          details: [`Workspace ${row.organizationId}. Review its recent mail and resume it in the back-office when the cause is fixed.`],
-        }),
-      ).catch((err) => console.error("[breaker] ops email failed", err));
-    }
+    await sendOpsAlert({
+      title: `Sending paused for ${row.name}`,
+      summary: reason,
+      details: [`Workspace ${row.organizationId}. Review its recent mail and resume it in the back-office when the cause is fixed.`],
+    });
   }
   return paused;
 }

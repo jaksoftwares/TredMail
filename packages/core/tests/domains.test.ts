@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextDomainState, type DomainState } from "../src/dns/domain-check.js";
+import { nextDomainState, type DomainState } from "../src/dns/domain-schedule.js";
 import { loadEnv } from "../src/config/env.js";
 
 const NOW = new Date("2026-11-10T12:00:00Z");
