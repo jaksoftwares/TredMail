@@ -4,7 +4,8 @@ import type { Prisma, Webhook } from "@tredmail/db";
 import { prisma } from "@tredmail/db";
 import { env } from "../config/env.js";
 import { redisConnection } from "../queue/redis.js";
-import { assertPublicHttpUrl } from "../security/url-safety.js";
+import { decryptSecret, encryptSecret } from "../security/crypto.js";
+import { assertPublicHttpUrl, fetchPublicUrl } from "../security/url-safety.js";
 
 import { WEBHOOK_EVENT_TYPES, type WebhookEventType } from "./events.js";
 
@@ -13,6 +14,15 @@ export { WEBHOOK_EVENT_TYPES, type WebhookEventType };
 export function generateWebhookSecret(): string {
   return `whsec_${crypto.randomBytes(24).toString("base64")}`;
 }
+
+/**
+ * Signing secrets are stored encrypted with the master key, like DKIM keys: a database leak
+ * alone must not let anyone forge TredMail webhooks. Rows written before encryption hold the
+ * plain `whsec_` value; they still work and `encrypt-secrets` converts them.
+ */
+export const sealWebhookSecret = (secret: string) => encryptSecret(secret);
+export const isSealedWebhookSecret = (stored: string) => !stored.startsWith("whsec_");
+export const openWebhookSecret = (stored: string) => (isSealedWebhookSecret(stored) ? decryptSecret(stored) : stored);
 
 /**
  * Standard Webhooks signature (https://www.standardwebhooks.com): HMAC-SHA256 over
@@ -50,8 +60,12 @@ export async function attemptWebhook(webhook: Pick<Webhook, "url" | "secret">, m
   let success = false;
 
   try {
-    await assertWebhookUrlAllowed(webhook.url);
-    const res = await fetch(webhook.url, {
+    // Production: the connection itself refuses private addresses (DNS rebinding cannot slip
+    // past). Development with WEBHOOK_ALLOW_PRIVATE_TARGETS may call http://localhost.
+    const send = allowPrivateTargets()
+      ? async (url: string, init: RequestInit) => (await assertWebhookUrlAllowed(url), fetch(url, init))
+      : fetchPublicUrl;
+    const res = await send(webhook.url, {
       method: "POST",
       redirect: "manual", // a redirect could point at an internal address
       headers: {
@@ -59,7 +73,7 @@ export async function attemptWebhook(webhook: Pick<Webhook, "url" | "secret">, m
         "User-Agent": "TredMail-Webhook/1.0",
         "webhook-id": messageId,
         "webhook-timestamp": String(timestamp),
-        "webhook-signature": signWebhookPayload(webhook.secret, messageId, timestamp, body),
+        "webhook-signature": signWebhookPayload(openWebhookSecret(webhook.secret), messageId, timestamp, body),
         "X-TredMail-Event": payload.type,
       },
       body,

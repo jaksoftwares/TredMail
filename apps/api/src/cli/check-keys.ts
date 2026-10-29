@@ -1,7 +1,8 @@
 /**
  * Checks that every encrypted secret in the database decrypts with this installation's
  * TREDMAIL_MASTER_ENCRYPTION_KEY. Run after a restore (scripts/restore.sh does) or a key
- * change: a domain whose DKIM key cannot be decrypted cannot send.
+ * change: a domain whose DKIM key cannot be decrypted cannot send, and a webhook whose secret
+ * cannot be decrypted cannot be signed.
  *
  *   node apps/api/dist/cli/check-keys.js     (exit code 1 when any secret fails)
  */
@@ -19,7 +20,22 @@ async function main() {
     }
   }
 
-  console.log(`check-keys: ${domains.length - failed.length} of ${domains.length} DKIM keys decrypt`);
+  const webhooks = await prisma.webhook.findMany({ select: { id: true, url: true, secret: true } });
+  let plain = 0;
+  for (const webhook of webhooks) {
+    if (webhook.secret.startsWith("whsec_")) {
+      plain++;
+      continue;
+    }
+    try {
+      decryptSecret(webhook.secret);
+    } catch {
+      failed.push(`signing secret of webhook ${webhook.id} (${webhook.url})`);
+    }
+  }
+
+  console.log(`check-keys: ${domains.length} DKIM keys and ${webhooks.length} webhook secrets checked`);
+  if (plain > 0) console.log(`check-keys: ${plain} webhook secret(s) are not encrypted yet; run encrypt-secrets`);
   if (failed.length > 0) {
     console.error(`check-keys: ${failed.length} secret(s) do not decrypt with this TREDMAIL_MASTER_ENCRYPTION_KEY:`);
     for (const item of failed) console.error(`  - ${item}`);

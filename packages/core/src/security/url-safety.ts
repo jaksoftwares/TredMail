@@ -1,5 +1,6 @@
 import dns from "dns/promises";
-import net from "net";
+import net, { type LookupFunction } from "net";
+import { Agent, fetch as undiciFetch } from "undici";
 
 export class UnsafeUrlError extends Error {}
 
@@ -79,4 +80,41 @@ export async function assertPublicHttpUrl(value: string, options: UrlSafetyOptio
     throw new UnsafeUrlError(`'${hostname}' resolves to a private or reserved address.`);
   }
   return url;
+}
+
+type LookupEntry = { address: string; family: number };
+
+/**
+ * A `lookup` for outbound connections that refuses private and reserved addresses at connect
+ * time. assertPublicHttpUrl alone is not enough: the HTTP client resolves the name again, and
+ * a DNS server that answers differently the second time (DNS rebinding) could point the request
+ * at an internal service. With this lookup the address that is checked is the one connected to.
+ */
+export function createSafeLookup(
+  resolveAll: (hostname: string) => Promise<LookupEntry[]> = async (hostname) => dns.lookup(hostname, { all: true, verbatim: true }),
+): LookupFunction {
+  return (hostname, options, callback) => {
+    resolveAll(hostname)
+      .then((entries) => {
+        if (entries.length === 0) throw new UnsafeUrlError(`Could not resolve '${hostname}'.`);
+        if (entries.some((e) => isPrivateAddress(e.address))) {
+          throw new UnsafeUrlError(`'${hostname}' resolves to a private or reserved address.`);
+        }
+        if (options?.all) callback(null, entries);
+        else callback(null, entries[0].address, entries[0].family);
+      })
+      .catch((err: NodeJS.ErrnoException) => callback(err, ""));
+  };
+}
+
+let publicOnlyAgent: Agent | null = null;
+
+/**
+ * fetch() for URLs supplied by customers (webhooks): https only, no credentials, and connections
+ * only to public addresses, checked when the connection is made. Throws UnsafeUrlError.
+ */
+export async function fetchPublicUrl(url: string, init: Parameters<typeof undiciFetch>[1] = {}) {
+  await assertPublicHttpUrl(url);
+  publicOnlyAgent ??= new Agent({ connect: { lookup: createSafeLookup() } });
+  return undiciFetch(url, { ...init, dispatcher: publicOnlyAgent });
 }

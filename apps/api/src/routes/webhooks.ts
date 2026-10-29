@@ -8,6 +8,7 @@ import {
   assertWebhookUrlAllowed,
   deliverWebhook,
   generateWebhookSecret,
+  sealWebhookSecret,
   replayWebhookDelivery,
 } from "@tredmail/core/webhooks/dispatcher";
 import { UnsafeUrlError } from "@tredmail/core/security/url-safety";
@@ -88,11 +89,13 @@ export async function webhookRoutes(fastify: FastifyInstance) {
       throw err;
     }
 
+    // Stored encrypted; the plain secret is returned once, below
+    const secret = generateWebhookSecret();
     const webhook = await prisma.webhook.create({
       data: {
         organizationId: request.organization!.id,
         url,
-        secret: generateWebhookSecret(),
+        secret: sealWebhookSecret(secret),
         subscribedTo: subscribed_to,
         isActive: true,
       },
@@ -111,7 +114,7 @@ export async function webhookRoutes(fastify: FastifyInstance) {
     return reply.status(201).send({
       id: webhook.id,
       url: webhook.url,
-      secret: webhook.secret, // shown once; store it to verify signatures
+      secret, // shown once; store it to verify signatures
       subscribed_to: webhook.subscribedTo,
       is_active: webhook.isActive,
       created_at: webhook.createdAt.toISOString(),
@@ -208,7 +211,8 @@ export async function webhookRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: { id: string } }>("/:id/rotate-secret", async (request, reply) => {
     const webhook = await findWebhook(request.organization!.id, request.params.id);
     if (!webhook) return reply.status(404).send(notFound);
-    const updated = await prisma.webhook.update({ where: { id: webhook.id }, data: { secret: generateWebhookSecret() } });
+    const secret = generateWebhookSecret();
+    const updated = await prisma.webhook.update({ where: { id: webhook.id }, data: { secret: sealWebhookSecret(secret) } });
     await recordAudit({
       organizationId: request.organization!.id,
       ...auditActor(request),
@@ -217,7 +221,7 @@ export async function webhookRoutes(fastify: FastifyInstance) {
       targetId: webhook.id,
       ipAddress: request.ip,
     });
-    return reply.send({ id: updated.id, secret: updated.secret });
+    return reply.send({ id: updated.id, secret });
   });
 
   // GET /v1/webhooks/:id/deliveries?status=&limit=&cursor= - Delivery log, newest first

@@ -58,6 +58,8 @@ const envSchema = z
     // Set when the API runs behind a reverse proxy (Caddy) so request.ip is the client's address.
     TRUST_PROXY: z.preprocess((val) => val === "true" || val === true, z.boolean()).default(false),
     RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(600),
+    // Requests per minute from one IP address across all keys (above any single key's limit)
+    RATE_LIMIT_PER_IP_PER_MINUTE: z.coerce.number().int().positive().default(3000),
 
     // TredMail's own sending domain: account emails come from no-reply@ and the sandbox
     // sender is onboarding@. It belongs to the platform workspace and must be DNS-verified.
@@ -147,8 +149,11 @@ const envSchema = z
     MPESA_CALLBACK_BASE_URL: z.string().url().optional(),
     // Confirm each successful payment notification with Daraja's query API before accepting it
     MPESA_VERIFY_CALLBACKS: z.preprocess((val) => val !== "false" && val !== false, z.boolean()).default(true),
-    // Optional comma-separated list of IP addresses allowed to send payment notifications
+    // Comma-separated IP addresses allowed to send payment notifications (required with live M-Pesa)
     MPESA_ALLOWED_IPS: z.string().optional(),
+    // Staff are alerted when a payment the customer made by hand (Paybill) is at least this
+    // amount, in whole currency units, so a forged or mistaken notification is noticed. 0 = off.
+    BILLING_LARGE_PAYMENT_ALERT: z.coerce.number().min(0).default(50_000),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.NODE_ENV !== "production") return;
@@ -186,6 +191,15 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ["MPESA_BASE_URL"],
         message: "points at the local simulator; remove it in production",
+      });
+    }
+    // Daraja does not sign callbacks, and Paybill confirmations cannot be re-checked with the
+    // query API: in live M-Pesa only Safaricom's own addresses may report a payment.
+    if (cfg.MPESA_CONSUMER_KEY && cfg.MPESA_ENVIRONMENT === "production" && !cfg.MPESA_ALLOWED_IPS?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["MPESA_ALLOWED_IPS"],
+        message: "is required with live M-Pesa: list Safaricom's callback IP addresses (see docs/BILLING_AND_PAYMENTS.md)",
       });
     }
     const callbackBase = cfg.MPESA_CALLBACK_BASE_URL ?? cfg.API_BASE_URL;

@@ -42,6 +42,21 @@ describe("loadEnv", () => {
     expect(() => assertApiSecrets({ ...cfg, BETTER_AUTH_SECRET: "s".repeat(64), INTERNAL_API_TOKEN: "t".repeat(64) })).not.toThrow();
   });
 
+  it("requires the Safaricom IP allowlist with live M-Pesa", () => {
+    const live = {
+      ...base,
+      NODE_ENV: "production",
+      TRACKING_BASE_URL: "https://track.example.com/v1/track",
+      API_BASE_URL: "https://api.example.com/v1",
+      MPESA_ENVIRONMENT: "production",
+      MPESA_CONSUMER_KEY: "key",
+    };
+    expect(configError(live)).toMatch(/MPESA_ALLOWED_IPS is required with live M-Pesa/);
+    expect(configError({ ...live, MPESA_ALLOWED_IPS: "196.201.214.200, 196.201.214.206" })).toBe("");
+    // The Daraja sandbox (staging) does not need it
+    expect(configError({ ...live, MPESA_ENVIRONMENT: "sandbox" })).toBe("");
+  });
+
   it("derives tracking URL and CORS origins in development", () => {
     const cfg = loadEnv({ ...base, API_BASE_URL: "http://localhost:3000/v1", CONSOLE_URL: "http://localhost:3001" });
     expect(cfg.TRACKING_BASE_URL).toBe("http://localhost:3000/v1/track");

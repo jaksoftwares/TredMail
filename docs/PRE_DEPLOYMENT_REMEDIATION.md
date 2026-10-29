@@ -457,11 +457,11 @@ All of the following must hold on staging, then be repeated on production before
 - [x] M10 seed role reset
 
 **Phase 4:**
-- [ ] H3 M-Pesa allowlist
-- [ ] M6 rate limiting
-- [ ] M7 SSRF pinning
-- [ ] M8 webhook secret encryption
-- [ ] L2 CSP
+- [x] H3 M-Pesa allowlist
+- [x] M6 rate limiting
+- [x] M7 SSRF pinning
+- [x] M8 webhook secret encryption
+- [x] L2 CSP
 
 **Phase 5:**
 - [ ] M4 per-recipient suppression
@@ -596,3 +596,37 @@ into a scratch database (12 workspaces, 5 domains, 141 emails) and `check-keys` 
 right master key and failed with a wrong one; the seed kept a changed role. Not yet exercised:
 the age encryption and rclone upload steps (no binaries on the development machine); they are
 part of the staging restore drill in the release gate.
+
+### Phase 4 (29 October 2026)
+
+- **H3.** With live M-Pesa (`MPESA_ENVIRONMENT=production`) the configuration is refused
+  without `MPESA_ALLOWED_IPS` (staging on the Daraja sandbox is not affected). The callback
+  token is redacted from the API's request logs (`security/log-redaction.ts`; production logs
+  at `info`, so it was being written). Paybill payments of at least
+  `BILLING_LARGE_PAYMENT_ALERT` (default KES 50,000) raise an operations alert. Safaricom's
+  current callback addresses must be confirmed with Safaricom before go-live; the repository
+  does not hard-code them.
+- **M6.** `security/ip-limits.ts`: after 30 invalid API keys from one address in a minute the
+  API answers 429 (with `Retry-After`) without a database lookup; malformed keys are refused
+  without a lookup at all. A ceiling of `RATE_LIMIT_PER_IP_PER_MINUTE` (default 3,000) applies
+  per address on top of the per-key limit. Both use a sliding one-minute window (the first
+  live test showed fixed windows letting a burst through across a minute boundary) and fail
+  open if Redis is unreachable. Trade-off: an application on the same address as others that
+  keeps using a wrong key blocks that address for up to a minute.
+- **M7.** Webhook deliveries use `fetchPublicUrl` (undici `Agent` with a connect-time lookup
+  that refuses private and reserved addresses), so the address checked is the one connected
+  to. Development with `WEBHOOK_ALLOW_PRIVATE_TARGETS` keeps plain fetch.
+- **M8.** Webhook signing secrets are stored encrypted with the master key. Old plain rows keep
+  working; the new `encrypt-secrets` CLI converts them and runs on every deploy (and in the
+  runbook's upgrade steps). `check-keys` now also checks webhook secrets.
+- **L2.** Content-Security-Policy on every console page in production builds. Images and fonts
+  may be remote because the sandboxed email previews inherit the policy; scripts, styles and
+  API calls are same-origin (`'unsafe-inline'` for Next.js's inline scripts).
+
+Verified on a development machine: 30 invalid keys answered 401, the next 429 with
+`Retry-After`; a real HTTPS request through the pinned client succeeded while `localhost` and
+`169.254.169.254` were refused; a legacy plain webhook secret was encrypted by `encrypt-secrets`
+(a second run changed nothing) and `check-keys` decrypted it; the console production build
+served the policy on the sign-in, docs, API reference and overview pages with no external
+scripts or stylesheets. Still to check on staging in a browser: no CSP violations in the
+console (console open with the developer tools), including Google sign-in and the previews.

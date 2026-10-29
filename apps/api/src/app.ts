@@ -7,6 +7,8 @@ import { prisma } from "@tredmail/db";
 import { redisConnection } from "@tredmail/core/queue/redis";
 import { hashApiKey } from "@tredmail/core/security/api-keys";
 import { readWorkerHealth } from "@tredmail/core/services/heartbeat";
+import { redactUrl } from "@tredmail/core/security/log-redaction";
+import { retryAfterMs, withinIpLimit } from "@tredmail/core/security/ip-limits";
 import { authenticate, requireScope } from "./middleware/auth.js";
 import { emailRoutes, sendBatch } from "./routes/emails.js";
 import { domainRoutes } from "./routes/domains.js";
@@ -34,7 +36,13 @@ export interface BuildOptions {
 
 export async function buildServer(options: BuildOptions = {}) {
   const fastify = Fastify({
-    logger: { level: env.LOG_LEVEL ?? (env.NODE_ENV === "development" ? "info" : env.NODE_ENV === "test" ? "silent" : "warn") },
+    logger: {
+      level: env.LOG_LEVEL ?? (env.NODE_ENV === "development" ? "info" : env.NODE_ENV === "test" ? "silent" : "warn"),
+      // Fastify's default request serializer, minus secrets carried in the URL
+      serializers: {
+        req: (request) => ({ method: request.method, url: redactUrl(request.url), host: request.host, remoteAddress: request.ip }),
+      },
+    },
     trustProxy: env.TRUST_PROXY,
     // Attachments travel base64 in the JSON body (20 files, 10 MB per request in total).
     bodyLimit: 10 * 1024 * 1024,
@@ -74,8 +82,19 @@ export async function buildServer(options: BuildOptions = {}) {
     return reply.status(health.status === "ok" ? 200 : 503).send(health);
   });
 
-  // Authenticated API, rate limited per API key (per IP when no key is sent).
+  // Authenticated API, rate limited per API key (per IP when no key is sent), with an overall
+  // ceiling per IP address on top.
   await fastify.register(async (api) => {
+    api.addHook("onRequest", async (request, reply) => {
+      if (await withinIpLimit(redisConnection, request.ip, env.RATE_LIMIT_PER_IP_PER_MINUTE)) return;
+      reply.header("Retry-After", String(Math.ceil(retryAfterMs() / 1000)));
+      return reply.status(429).send({
+        statusCode: 429,
+        error: "rate_limit_exceeded",
+        message: `Too many requests from your address: at most ${env.RATE_LIMIT_PER_IP_PER_MINUTE} per minute.`,
+      });
+    });
+
     await api.register(rateLimit, {
       max: env.RATE_LIMIT_PER_MINUTE,
       timeWindow: "1 minute",

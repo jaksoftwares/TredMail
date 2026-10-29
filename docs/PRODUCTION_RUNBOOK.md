@@ -406,8 +406,10 @@ cd /opt/tredmail
 git pull
 $DC build
 $DC run --rm --no-deps api npx prisma migrate deploy --schema=packages/db/prisma/schema.prisma
+$DC run --rm --no-deps api node apps/api/dist/cli/encrypt-secrets.js
 $DC up -d
 curl -s https://api.tredmail.dovepeakdigital.com/health/ready
+curl -s https://api.tredmail.dovepeakdigital.com/health/worker
 ```
 
 Running `bash deploy-hostinger.sh` again does the same, plus the OS update and checks. It is
@@ -594,7 +596,7 @@ closed and its release gate (section 5) has passed on staging.
 - [ ] First deploy done; owner password and Dovepeak API key saved
 - [ ] `.env` backed up in a password manager
 - [ ] Record 13 (DKIM) added from the seed output
-- [ ] `.env` completed: `OPS_EMAIL`, M-Pesa, billing; `$DC up -d`; `payments-setup` run
+- [ ] `.env` completed: `OPS_EMAIL`, M-Pesa (including `MPESA_ALLOWED_IPS`), billing; `$DC up -d`; `payments-setup` run
 - [ ] Health, PTR, and the `mta1` and `smtp` certificates verified (4.6), then records 17 and 18 added
 - [ ] Owner password changed, 2FA on, domains verified, test email received with DKIM pass
 - [ ] Backups: `BACKUP_AGE_RECIPIENT` and `BACKUP_RCLONE_REMOTE` set, encrypted copies seen in the bucket, a restore drill passed (6.3)

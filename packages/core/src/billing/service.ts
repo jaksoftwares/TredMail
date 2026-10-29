@@ -645,6 +645,16 @@ export async function recordIncomingPayment(gatewayId: string, incoming: Incomin
     return "unmatched";
   }
   await notifyPaymentReceived(paymentId);
+  if (env.BILLING_LARGE_PAYMENT_ALERT > 0 && incoming.amount >= env.BILLING_LARGE_PAYMENT_ALERT * 100) {
+    await notifyOps(
+      "Large manual payment applied",
+      `${formatMoney(incoming.amount, incoming.currency)} by ${incoming.method} was applied to account '${incoming.accountReference}'.`,
+      [
+        `Receipt ${incoming.receipt} from ${incoming.payerName ?? "an unknown payer"} (${incoming.payerPhone ?? "no phone"}).`,
+        "Check it against the M-Pesa statement. If it is not there, void the payment in the back-office.",
+      ],
+    );
+  }
   return "applied";
 }
 

@@ -135,6 +135,8 @@ echo "🚢 Building and starting TredMail ($STAGE)..."
 "${COMPOSE[@]}" up -d postgres redis
 echo "🗄️ Applying database migrations..."
 "${COMPOSE[@]}" run --rm --no-deps api npx prisma migrate deploy --schema=packages/db/prisma/schema.prisma
+# Encrypt any webhook signing secrets still stored in plain text (safe to repeat)
+"${COMPOSE[@]}" run --rm --no-deps api node apps/api/dist/cli/encrypt-secrets.js
 "${COMPOSE[@]}" up -d
 
 # 7. Production: copy Caddy's certificates to KumoMTA and the SMTP relay now and twice a day.

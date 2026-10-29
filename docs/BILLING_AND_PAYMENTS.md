@@ -75,11 +75,16 @@ Internal, with no limits.
 | `MPESA_CALLBACK_URL` | Leave empty. TredMail then uses `https://api.tredmail.dovepeakdigital.com` and builds the paths itself, each with a secret token. If you set it, give an `https://` origin without "mpesa" or "safaricom" in it (Safaricom rejects those). |
 
 **Safety.**
-- Daraja callbacks are not signed. TredMail protects them three ways:
-  - a secret token in each callback URL;
-  - before accepting a success, it re-checks the payment with Daraja's query API
-    (`MPESA_VERIFY_CALLBACKS=true`);
-  - an optional IP allowlist (`MPESA_ALLOWED_IPS`).
+- Daraja callbacks are not signed. TredMail protects them four ways:
+  - a secret token in each callback URL, which is redacted from the API's request logs;
+  - before accepting an M-Pesa Express (STK) success, it re-checks the payment with Daraja's
+    query API (`MPESA_VERIFY_CALLBACKS=true`). Paybill confirmations cannot be re-checked
+    this way, which is why the next point is mandatory;
+  - an IP allowlist (`MPESA_ALLOWED_IPS`), **required with live M-Pesa**: the API refuses to
+    start without it. Use the callback addresses Safaricom publishes for Daraja and confirm
+    the current list with Safaricom before go-live;
+  - staff are alerted about Paybill payments of at least `BILLING_LARGE_PAYMENT_ALERT`
+    (default KES 50,000) so they can be checked against the M-Pesa statement.
 - Every callback is stored, and Back-office, Gateway log shows each one.
 
 **Missed callbacks.** The worker asks Daraja about any payment still pending after a minute.

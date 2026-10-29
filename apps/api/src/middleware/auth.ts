@@ -6,6 +6,8 @@ import { hashApiKey } from "@tredmail/core/security/api-keys";
 import { hasScope, type ApiScope } from "@tredmail/core/security/scopes";
 import { ROLE_SCOPES, canManageMembers, type WorkspaceRole } from "@tredmail/core/security/roles";
 import { env } from "@tredmail/core/config/env";
+import { redisConnection } from "@tredmail/core/queue/redis";
+import { recordAuthFailure, retryAfterMs, tooManyAuthFailures } from "@tredmail/core/security/ip-limits";
 import { auth } from "../auth.js";
 
 /** Header the console sends to say which workspace a signed-in member is acting in. */
@@ -66,12 +68,18 @@ async function loadSessionUser(request: FastifyRequest): Promise<SessionUser | n
 }
 
 async function authenticateWithApiKey(request: FastifyRequest, reply: FastifyReply, token: string) {
-  const apiKey = await prisma.apiKey.findUnique({
-    where: { keyHash: hashApiKey(token) },
-    include: { organization: true },
-  });
+  if (await tooManyAuthFailures(redisConnection, request.ip)) {
+    reply.header("Retry-After", String(Math.ceil(retryAfterMs() / 1000)));
+    return fail(reply, 429, "rate_limit_exceeded", "Too many requests with invalid API keys from your address. Try again in a minute.");
+  }
+
+  // Keys always start tred_live_ or tred_test_: anything else is refused without a lookup
+  const apiKey = /^tred_(live|test)_[0-9a-f]{32,64}$/.test(token)
+    ? await prisma.apiKey.findUnique({ where: { keyHash: hashApiKey(token) }, include: { organization: true } })
+    : null;
 
   if (!apiKey || apiKey.revokedAt) {
+    await recordAuthFailure(redisConnection, request.ip);
     return fail(reply, 401, "unauthorized", "Invalid API key provided.");
   }
   if (apiKey.expiresAt && apiKey.expiresAt <= new Date()) {
