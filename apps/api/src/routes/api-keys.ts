@@ -10,6 +10,8 @@ const createKeySchema = z.object({
   name: z.string().trim().min(1).max(50),
   scopes: z.array(z.enum(API_SCOPES)).min(1).optional().default(DEFAULT_KEY_SCOPES),
   expires_at: z.string().datetime().optional(),
+  // test: validated and recorded but never delivered (see SendEmailInput / acceptEmail)
+  mode: z.enum(["live", "test"]).default("live"),
 });
 
 export async function apiKeyRoutes(fastify: FastifyInstance) {
@@ -48,7 +50,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance) {
       });
     }
 
-    const { name, scopes, expires_at } = parseResult.data;
+    const { name, scopes, expires_at, mode: createdMode } = parseResult.data;
 
     if (!canGrantScopes(request.principal!.scopes, scopes)) {
       return reply.status(403).send({
@@ -67,7 +69,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance) {
       });
     }
 
-    const key = generateApiKey(true);
+    const key = generateApiKey(createdMode === "live");
     const apiKey = await prisma.apiKey.create({
       data: {
         organizationId: request.organization!.id,
@@ -85,7 +87,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance) {
       action: "api_key.created",
       targetType: "api_key",
       targetId: apiKey.id,
-      metadata: { name, scopes, keyPrefix: key.keyPrefix },
+      metadata: { name, scopes, mode: createdMode, keyPrefix: key.keyPrefix },
       ipAddress: request.ip,
     });
 
@@ -93,6 +95,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance) {
       id: apiKey.id,
       name: apiKey.name,
       token: key.plaintextKey,
+      mode: createdMode,
       scopes: apiKey.scopes,
       expires_at: apiKey.expiresAt?.toISOString() ?? null,
       created_at: apiKey.createdAt.toISOString(),

@@ -9,6 +9,12 @@ const KNOWN_SAMPLE_KEYS = new Set([
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 ]);
 
+/**
+ * docker-compose passes unset optional variables as empty strings (`${VAR:-}`). An empty value
+ * means "not set", so it must not fail validation the way a malformed value does.
+ */
+const blankAsUnset = (val: unknown) => (typeof val === "string" && val.trim() === "" ? undefined : val);
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
@@ -52,6 +58,11 @@ const envSchema = z
     SMTP_PASS: z.string().optional().default(""),
     // Only for local relays with self-signed certificates. Refused in production.
     SMTP_ALLOW_INVALID_CERTS: z.preprocess((val) => val === "true" || val === true, z.boolean()).default(false),
+    // Skips STARTTLS on the hop to KumoMTA's injection port. That port is reachable only inside
+    // the Docker network (not published, relay limited to Docker networks) and has no certificate
+    // of its own, so the worker would otherwise reject its self-signed one. Production accepts it
+    // for the `kumomta` host only.
+    SMTP_SKIP_STARTTLS: z.preprocess((val) => val === "true" || val === true, z.boolean()).default(false),
 
     // Lets developers point webhooks at http://localhost. Refused in production.
     WEBHOOK_ALLOW_PRIVATE_TARGETS: z.preprocess((val) => val === "true" || val === true, z.boolean()).default(false),
@@ -76,17 +87,20 @@ const envSchema = z
     MTA_HOSTNAME: z.string().default("mta1.tredmail.dovepeakdigital.com"),
     // Where operational mail goes: alerts, and mail sent to postmaster@, abuse@, dmarc@ and
     // other addresses at PRIMARY_DOMAIN. Unset = alerts are only logged and inbound mail is dropped.
-    OPS_EMAIL: z.string().email().optional(),
+    OPS_EMAIL: z.preprocess(blankAsUnset, z.string().email().optional()),
     // Chat webhook (Slack, Mattermost, Discord, Google Chat) that receives every operations
     // alert. Unlike email it does not depend on TredMail's own mail server being healthy.
     ALERT_WEBHOOK_URL: z.preprocess((val) => (val === "" ? undefined : val), z.string().url().optional()),
     // At most this many inbound messages are forwarded to OPS_EMAIL per day (spam protection).
     INBOUND_FORWARD_DAILY_LIMIT: z.coerce.number().int().min(0).default(200),
     // First day (YYYY-MM-DD, UTC) of IP warm-up. Unset = no warm-up cap.
-    MTA_WARMUP_START: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/, "must be a date like 2026-11-01")
-      .optional(),
+    MTA_WARMUP_START: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/, "must be a date like 2026-11-01")
+        .optional(),
+    ),
     // Optional relay (another provider's SMTP) for mail above the day's warm-up cap.
     FALLBACK_SMTP_HOST: z.string().optional(),
     FALLBACK_SMTP_PORT: z.coerce.number().int().positive().default(587),
@@ -127,7 +141,7 @@ const envSchema = z
     // Automatic payment requests (M-Pesa prompts) are only sent between 08:00 and 20:00 here
     BILLING_TIMEZONE: z.string().default("Africa/Nairobi"),
     // Shown on invoices and billing emails as the address for billing questions
-    BILLING_SUPPORT_EMAIL: z.string().email().optional(),
+    BILLING_SUPPORT_EMAIL: z.preprocess(blankAsUnset, z.string().email().optional()),
 
     // --- M-Pesa (Safaricom Daraja). The gateway is enabled when the four credentials are set. ---
     MPESA_ENVIRONMENT: z.enum(["sandbox", "production"]).default("sandbox"),
@@ -184,6 +198,13 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ["SMTP_ALLOW_INVALID_CERTS"],
         message: "must not be enabled in production",
+      });
+    }
+    if (cfg.SMTP_SKIP_STARTTLS && cfg.SMTP_HOST !== "kumomta") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["SMTP_SKIP_STARTTLS"],
+        message: "is only allowed in production for the internal kumomta host (SMTP_HOST=kumomta)",
       });
     }
     if (cfg.MPESA_BASE_URL && /localhost|127\.0\.0\.1/.test(cfg.MPESA_BASE_URL)) {
@@ -248,8 +269,16 @@ function normalizeMpesa(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return out;
 }
 
+/**
+ * A variable left blank (`NAME=`, as .env.example ships most of them) means "not set". Without this,
+ * a copied .env fails validation on every blank number, URL, email or secret.
+ */
+function withoutBlanks(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(source).filter(([, value]) => value !== undefined && value.trim() !== ""));
+}
+
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
-  const parsed = envSchema.safeParse(normalizeMpesa(source));
+  const parsed = envSchema.safeParse(normalizeMpesa(withoutBlanks(source)));
   if (!parsed.success) {
     const problems = parsed.error.issues
       .map((issue) => `  - ${issue.path.join(".") || "(root)"} ${issue.message}`)

@@ -62,4 +62,36 @@ describe("loadEnv", () => {
     expect(cfg.TRACKING_BASE_URL).toBe("http://localhost:3000/v1/track");
     expect(cfg.CORS_ORIGIN_LIST).toEqual(["http://localhost:3001"]);
   });
+
+  it("treats blank optional values from docker-compose as unset", () => {
+    const cfg = loadEnv({
+      ...base,
+      OPS_EMAIL: "",
+      BILLING_SUPPORT_EMAIL: "",
+      MTA_WARMUP_START: "",
+    });
+    expect(cfg.OPS_EMAIL).toBeUndefined();
+    expect(cfg.BILLING_SUPPORT_EMAIL).toBeUndefined();
+    expect(cfg.MTA_WARMUP_START).toBeUndefined();
+  });
+
+  it("treats any blank variable from a copied .env.example as unset", () => {
+    expect(configError({ ...base, INTERNAL_API_TOKEN: "", SMTP_RELAY_TLS_PORT: "", SMTP_RELAY_TLS_CERT: "", MPESA_CONSUMER_KEY: "" })).toBe("");
+  });
+
+  it("still rejects malformed values for those fields", () => {
+    expect(configError({ ...base, OPS_EMAIL: "not-an-email" })).toMatch(/OPS_EMAIL/);
+    expect(configError({ ...base, MTA_WARMUP_START: "20-11-2026" })).toMatch(/MTA_WARMUP_START/);
+  });
+
+  it("allows skipping STARTTLS in production only for the internal kumomta host", () => {
+    const prod = {
+      ...base,
+      NODE_ENV: "production",
+      TRACKING_BASE_URL: "https://track.example.com/v1/track",
+      SMTP_SKIP_STARTTLS: "true",
+    };
+    expect(configError({ ...prod, SMTP_HOST: "kumomta" })).toBe("");
+    expect(configError({ ...prod, SMTP_HOST: "smtp.example.com" })).toMatch(/SMTP_SKIP_STARTTLS is only allowed/);
+  });
 });

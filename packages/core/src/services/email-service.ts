@@ -1,8 +1,10 @@
 import { prisma, type Domain } from "@tredmail/db";
 import { enqueueEmail, removeQueuedEmail } from "../queue/email.queue.js";
+import { SENDABLE_DOMAIN_STATUSES } from "../delivery/attempts.js";
 import { renderTemplate } from "../mail/template-engine.js";
 import { releaseUsage, reserveUsage } from "../billing/usage.js";
 import { env, PLATFORM_ORG_SLUG } from "../config/env.js";
+import { dispatchWebhookEvent } from "../webhooks/dispatcher.js";
 import {
   checkListUnsubscribeHeaders,
   findReservedHeaders,
@@ -51,7 +53,7 @@ async function resolveSendingDomain(
     const domain = platformId
       ? await prisma.domain.findFirst({ where: { organizationId: platformId, name: sender.domain } })
       : null;
-    if (!domain || domain.status !== "VERIFIED") {
+    if (!domain || !SENDABLE_DOMAIN_STATUSES.has(domain.status)) {
       return { ok: false, statusCode: 503, error: "sandbox_unavailable", message: "The sandbox sender is not available right now." };
     }
     if (sender.address !== `${SANDBOX_LOCAL_PART}@${sender.domain}`) {
@@ -103,7 +105,8 @@ async function resolveSendingDomain(
       message: `Domain '${sender.domain}' is not registered in this workspace. Add it under Domains first.`,
     };
   }
-  if (domain.status !== "VERIFIED") {
+  // DEGRADED: a recent re-check failed but the domain still sends (the worker holds the same set)
+  if (!SENDABLE_DOMAIN_STATUSES.has(domain.status)) {
     return {
       ok: false,
       statusCode: 403,
@@ -121,7 +124,9 @@ export type AcceptResult =
         id: string;
         from: string;
         to: string[];
-        status: "queued" | "scheduled";
+        status: "queued" | "scheduled" | "delivered";
+        /** Test mode (tred_test_ key): recorded and reported as delivered, never sent */
+        test: boolean;
         scheduledAt: Date | null;
         createdAt: Date;
         /** Recipients left out because they are on the workspace's suppression list */
@@ -192,18 +197,54 @@ export interface AcceptOptions {
    * warm-up cap and does not count against the platform workspace's plan.
    */
   priority?: "NORMAL" | "SYSTEM";
+  /**
+   * Test mode (a `tred_test_` key): the email is validated and recorded with `isTest`, but is
+   * never delivered and does not count against the plan.
+   */
+  testMode?: boolean;
+}
+
+/** A send that passed every check. Nothing is written until it is committed. */
+export interface PreparedSend {
+  organizationId: string;
+  testMode: boolean;
+  /** Recipients to charge against the plan (0 for system and test mail). */
+  chargeable: number;
+  priority: "NORMAL" | "SYSTEM";
+  record: {
+    domainId: string;
+    from: string;
+    replyTo: string | undefined;
+    subject: string;
+    html: string | undefined;
+    text: string | undefined;
+    templateId: string | null;
+    to: string[];
+    cc: string[];
+    bcc: string[];
+    removed: string[];
+    scheduledAt: Date | null;
+    trackOpens: boolean;
+    trackClicks: boolean;
+    unsubscribeLink: boolean;
+    headers: Record<string, string> | undefined;
+    tags: SendEmailInput["tags"];
+    attachments: Array<{ filename: string; contentType: string | undefined; contentId: string | undefined; content: Buffer; size: number }>;
+  };
 }
 
 /**
- * Validates sender domain and suppressions, records the email (with its attachments) and
- * queues it for delivery, now or at scheduled_at. Shared by the API, batch sends and the
- * SMTP relay so every path applies the same rules.
- *
- * Suppressed recipients are removed and listed in the result (`suppressed`); the email is
- * refused only when no recipient is left.
+ * Runs every check on a send without writing anything: content, headers, sender domain,
+ * suppressions and workspace standing. The SMTP relay runs it for every part of a message
+ * before accepting any of them.
  */
-export async function acceptEmail(organizationId: string, payload: SendEmailInput, options: AcceptOptions = {}): Promise<AcceptResult> {
+export async function prepareSend(
+  organizationId: string,
+  payload: SendEmailInput,
+  options: AcceptOptions = {},
+): Promise<{ ok: true; prepared: PreparedSend } | Failure> {
   const priority = options.priority ?? "NORMAL";
+  const testMode = options.testMode === true;
   const content = await resolveContent(organizationId, payload);
   if (!content.ok) return content;
   if (!content.from) return fail(422, "missing_from", "Provide 'from' (or set a default sender on the template).");
@@ -254,66 +295,99 @@ export async function acceptEmail(organizationId: string, payload: SendEmailInpu
   const standing = await sendingStanding(organizationId);
   if (!standing.ok) return standing;
 
-  // Count the recipients against the plan's limits last, so refused requests use nothing.
-  const usage = priority === "SYSTEM" ? null : await reserveUsage(organizationId, allRecipients.length);
-  if (usage && !usage.ok) return usage;
-
   const attachments = (payload.attachments ?? []).map((a) => {
     const bytes = Buffer.from(a.content, "base64");
     return { filename: a.filename, contentType: a.content_type, contentId: a.content_id, content: bytes, size: bytes.length };
   });
 
-  const scheduledAt = schedule.at;
-  const email = await prisma
-    .$transaction(async (tx) => {
-      const created = await tx.email.create({
-        data: {
-          organizationId,
-          domainId: domain.id,
-          from: content.from!,
-          to,
-          cc,
-          bcc,
-          replyTo: content.replyTo,
-          subject: content.subject!,
-          htmlBody: content.html,
-          textBody: content.text,
-          status: scheduledAt ? "SCHEDULED" : "QUEUED",
-          scheduledAt,
-          templateId: content.templateId,
-          priority,
-          // Tracking is off unless the request or the workspace's defaults turn it on
-          trackOpens: payload.track_opens ?? standing.trackOpensDefault,
-          trackClicks: payload.track_clicks ?? standing.trackClicksDefault,
-          unsubscribeLink: payload.unsubscribe === true,
-          metadata: payload.headers ? { headers: payload.headers } : undefined,
-          tags: payload.tags,
-          attachments: attachments.length ? { create: attachments } : undefined,
-        },
-      });
-      await tx.emailEvent.create({
-        data: {
-          emailId: created.id,
-          type: scheduledAt ? "SCHEDULED" : "QUEUED",
-          details: {
-            ...(scheduledAt ? { scheduledAt: scheduledAt.toISOString() } : {}),
-            ...(removed.length ? { suppressed: removed } : {}),
-          },
-        },
-      });
-      return created;
-    })
-    .catch(async (err) => {
-      if (usage) await releaseUsage(organizationId, allRecipients.length, usage.day);
-      throw err;
-    });
+  return {
+    ok: true,
+    prepared: {
+      organizationId,
+      testMode,
+      priority,
+      // Test and system mail do not count against the plan; everything else counts per recipient
+      chargeable: testMode || priority === "SYSTEM" ? 0 : allRecipients.length,
+      record: {
+        domainId: domain.id,
+        from: content.from,
+        replyTo: content.replyTo,
+        subject: content.subject,
+        html: content.html,
+        text: content.text,
+        templateId: content.templateId,
+        to,
+        cc,
+        bcc,
+        removed,
+        scheduledAt: schedule.at,
+        // Tracking is off unless the request or the workspace's defaults turn it on
+        trackOpens: payload.track_opens ?? standing.trackOpensDefault,
+        trackClicks: payload.track_clicks ?? standing.trackClicksDefault,
+        unsubscribeLink: payload.unsubscribe === true,
+        headers: payload.headers,
+        tags: payload.tags,
+        attachments,
+      },
+    },
+  };
+}
 
-  // The database row is the source of truth. If Redis is briefly unavailable, the worker's
-  // outbox sweeper queues the email within a minute, so the request still succeeds.
-  try {
-    await enqueueEmail({ emailId: email.id, organizationId, domainId: domain.id }, scheduledAt, priority);
-  } catch (err) {
-    console.error(`[email] could not queue ${email.id} now; the outbox sweeper will retry`, err);
+/**
+ * Records a prepared send and queues it. Usage must already be reserved for `chargeable`
+ * recipients (see acceptEmail). Test mail is recorded as delivered and never queued.
+ */
+export async function commitSend(prepared: PreparedSend): Promise<Extract<AcceptResult, { ok: true }>> {
+  const { organizationId, testMode, priority, record } = prepared;
+  const scheduledAt = record.scheduledAt;
+  const email = await prisma.$transaction(async (tx) => {
+    const created = await tx.email.create({
+      data: {
+        organizationId,
+        domainId: record.domainId,
+        from: record.from,
+        to: record.to,
+        cc: record.cc,
+        bcc: record.bcc,
+        replyTo: record.replyTo,
+        subject: record.subject,
+        htmlBody: record.html,
+        textBody: record.text,
+        status: testMode ? "DELIVERED" : scheduledAt ? "SCHEDULED" : "QUEUED",
+        deliveredAt: testMode ? new Date() : null,
+        isTest: testMode,
+        scheduledAt,
+        templateId: record.templateId,
+        priority,
+        trackOpens: record.trackOpens,
+        trackClicks: record.trackClicks,
+        unsubscribeLink: record.unsubscribeLink,
+        metadata: record.headers ? { headers: record.headers } : undefined,
+        tags: record.tags,
+        attachments: record.attachments.length ? { create: record.attachments } : undefined,
+      },
+    });
+    await tx.emailEvent.create({
+      data: {
+        emailId: created.id,
+        type: testMode ? "TEST_MODE" : scheduledAt ? "SCHEDULED" : "QUEUED",
+        details: {
+          ...(scheduledAt && !testMode ? { scheduledAt: scheduledAt.toISOString() } : {}),
+          ...(record.removed.length ? { suppressed: record.removed } : {}),
+        },
+      },
+    });
+    return created;
+  });
+
+  if (!testMode) {
+    // The database row is the source of truth. If Redis is briefly unavailable, the worker's
+    // outbox sweeper queues the email within a minute, so the request still succeeds.
+    try {
+      await enqueueEmail({ emailId: email.id, organizationId, domainId: record.domainId }, scheduledAt, priority);
+    } catch (err) {
+      console.error(`[email] could not queue ${email.id} now; the outbox sweeper will retry`, err);
+    }
   }
 
   return {
@@ -322,12 +396,94 @@ export async function acceptEmail(organizationId: string, payload: SendEmailInpu
       id: email.id,
       from: email.from,
       to: email.to,
-      status: scheduledAt ? "scheduled" : "queued",
+      status: testMode ? "delivered" : scheduledAt ? "scheduled" : "queued",
       scheduledAt: email.scheduledAt,
       createdAt: email.createdAt,
-      suppressed: removed,
+      suppressed: record.removed,
+      test: testMode,
     },
   };
+}
+
+/**
+ * Validates sender domain and suppressions, records the email (with its attachments) and
+ * queues it for delivery, now or at scheduled_at. Shared by the API, batch sends and the
+ * SMTP relay so every path applies the same rules.
+ *
+ * Suppressed recipients are removed and listed in the result (`suppressed`); the email is
+ * refused only when no recipient is left.
+ */
+export async function acceptEmail(organizationId: string, payload: SendEmailInput, options: AcceptOptions = {}): Promise<AcceptResult> {
+  const checked = await prepareSend(organizationId, payload, options);
+  if (!checked.ok) return checked;
+  const { prepared } = checked;
+
+  // Count the recipients against the plan's limits last, so refused requests use nothing.
+  let day: Date | null = null;
+  if (prepared.chargeable > 0) {
+    const usage = await reserveUsage(organizationId, prepared.chargeable);
+    if (!usage.ok) return usage;
+    day = usage.day;
+  }
+  try {
+    return await commitSend(prepared);
+  } catch (err) {
+    if (day) await releaseUsage(organizationId, prepared.chargeable, day);
+    throw err;
+  }
+}
+
+/**
+ * Records a message part that was refused as a FAILED email, so it shows in the console and fires
+ * email.failed. An email belongs to a registered domain, so this needs the sender's domain to be
+ * registered in the workspace; otherwise the refusal is only logged.
+ */
+export async function recordRefusedEmail(
+  organizationId: string,
+  payload: SendEmailInput,
+  reason: { error: string; message: string },
+  options: AcceptOptions = {},
+): Promise<boolean> {
+  const sender = payload.from ? parseFromAddress(payload.from) : null;
+  const domain = sender ? await prisma.domain.findFirst({ where: { organizationId, name: sender.domain } }) : null;
+  if (!domain || !payload.from) {
+    console.warn(`[email] refused message not recorded (sender domain not registered): ${reason.error}`);
+    return false;
+  }
+  const from = payload.from;
+  const email = await prisma.$transaction(async (tx) => {
+    const created = await tx.email.create({
+      data: {
+        organizationId,
+        domainId: domain.id,
+        from,
+        to: toList(payload.to),
+        cc: toList(payload.cc),
+        bcc: toList(payload.bcc),
+        subject: payload.subject ?? "(no subject)",
+        htmlBody: payload.html,
+        textBody: payload.text,
+        status: "FAILED",
+        smtpResponse: `${reason.error}: ${reason.message}`.slice(0, 2000),
+        priority: options.priority ?? "NORMAL",
+        isTest: options.testMode === true,
+      },
+    });
+    await tx.emailEvent.create({
+      data: { emailId: created.id, type: "FAILED", details: { error: reason.error, message: reason.message } },
+    });
+    return created;
+  });
+  await dispatchWebhookEvent(organizationId, "email.failed", {
+    email_id: email.id,
+    from: email.from,
+    to: email.to,
+    subject: email.subject,
+    error: reason.error,
+    reason: reason.message,
+    ...(options.testMode ? { test: true } : {}),
+  }).catch((err) => console.error("[email] email.failed webhook failed", err));
+  return true;
 }
 
 /**

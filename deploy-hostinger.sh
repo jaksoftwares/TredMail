@@ -106,6 +106,8 @@ if [ ! -f "$ENV_FILE" ]; then
             echo "# The worker hands mail to KumoMTA inside the Docker network"
             echo "SMTP_HOST=kumomta"
             echo "SMTP_PORT=2525"
+            echo "# KumoMTA's injection port has no certificate of its own; this hop stays inside Docker"
+            echo "SMTP_SKIP_STARTTLS=true"
             echo "MTA_HOSTNAME=${MTA_HOSTNAME:-mta1.tredmail.dovepeakdigital.com}"
             echo "# Alerts and mail sent to postmaster@/abuse@/dmarc@ are forwarded here"
             echo "OPS_EMAIL=${OPS_EMAIL:-}"

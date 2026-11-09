@@ -1,7 +1,7 @@
 <p align="center"><img src="apps/console/public/brand/dovepeak-logo.svg" alt="Dovepeak Technologies" width="280"></p>
 
 # TredMail
-> **An Enterprise-Grade, Self-Hosted Transactional & Marketing Email Platform**  
+> **An Enterprise-Grade, Self-Hosted Transactional Email Platform**  
 > *A product of Dovepeak Technologies*
 
 ---

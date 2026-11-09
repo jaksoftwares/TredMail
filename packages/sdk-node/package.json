@@ -1,7 +1,6 @@
 {
   "name": "@dovepeak/tredmail",
   "version": "1.3.0",
-  "private": true,
   "description": "Node.js SDK for TredMail, the transactional email API by Dovepeak Technologies",
   "license": "UNLICENSED",
   "author": "Dovepeak Technologies",

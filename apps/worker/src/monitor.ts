@@ -223,6 +223,9 @@ export async function sweepOutbox(now = new Date()) {
       OR: [
         { status: "QUEUED", updatedAt: { lt: stale } },
         { status: "SCHEDULED", scheduledAt: { lt: stale } },
+        // Mid-send: waiting on a retry, or its job was lost. Queueing is a no-op while the job
+        // exists, and a job that does run checks with KumoMTA before it sends again (recoveryDecision).
+        { status: "SENDING", updatedAt: { lt: stale } },
       ],
     },
     select: { id: true, organizationId: true, domainId: true, priority: true },
@@ -240,20 +243,55 @@ export async function sweepOutbox(now = new Date()) {
   return { emails: emails.length, webhooks: deliveries.length };
 }
 
+type RepeatOptions = Parameters<Queue["upsertJobScheduler"]>[1];
+
+/** Health checks, outbox sweep, daily retention, billing, payment reconciliation, domain checks. */
+const MAINTENANCE_SCHEDULES: Array<{ id: string; repeat: RepeatOptions; job: string }> = [
+  { id: "delivery-health", repeat: { every: EVERY_MS }, job: "health-check" },
+  { id: "outbox-sweep", repeat: { every: 60_000 }, job: "outbox" },
+  { id: "data-retention", repeat: { pattern: "30 2 * * *", tz: "UTC" }, job: "retention" },
+  { id: "billing-cycle", repeat: { every: 10 * 60_000 }, job: "billing" },
+  { id: "payments-reconcile", repeat: { every: 60_000 }, job: "reconcile" },
+  { id: "domain-checks", repeat: { every: 60_000 }, job: "domains" },
+];
+
+/** How often a missing schedule is put back (a Redis flush or restore removes them all). */
+const SCHEDULE_CHECK_MS = 60_000;
+
+/**
+ * Creates each schedule that is missing. Existing ones are left alone: re-creating them would
+ * move their next run, so the sweeper would never run on time.
+ */
+async function ensureSchedules(queue: Queue) {
+  for (const schedule of MAINTENANCE_SCHEDULES) {
+    if (await queue.getJobScheduler(schedule.id)) continue;
+    await queue.upsertJobScheduler(schedule.id, schedule.repeat, { name: schedule.job });
+    console.log(`[monitor] created missing schedule ${schedule.id}`);
+  }
+}
+
 /**
  * Schedules health checks, the outbox sweeper, the daily retention run, the billing cycle,
- * payment reconciliation and domain DNS checks (shared by all worker processes).
+ * payment reconciliation and domain DNS checks (shared by all worker processes). Checked every
+ * minute, so a Redis flush or restore stops background work for a minute at most.
  */
 export function startMonitor() {
   const queue = new Queue(QUEUE, { connection: redisConnection });
-  void Promise.all([
-    queue.upsertJobScheduler("delivery-health", { every: EVERY_MS }, { name: "health-check" }),
-    queue.upsertJobScheduler("outbox-sweep", { every: 60_000 }, { name: "outbox" }),
-    queue.upsertJobScheduler("data-retention", { pattern: "30 2 * * *", tz: "UTC" }, { name: "retention" }),
-    queue.upsertJobScheduler("billing-cycle", { every: 10 * 60_000 }, { name: "billing" }),
-    queue.upsertJobScheduler("payments-reconcile", { every: 60_000 }, { name: "reconcile" }),
-    queue.upsertJobScheduler("domain-checks", { every: 60_000 }, { name: "domains" }),
-  ]).catch((err) => console.error("[monitor] could not schedule maintenance jobs", err));
+  let checking = false;
+  const check = async () => {
+    // Redis may be down for a while: don't stack up checks that are all waiting for it
+    if (checking) return;
+    checking = true;
+    try {
+      await ensureSchedules(queue);
+    } catch (err) {
+      console.error("[monitor] could not schedule maintenance jobs", err);
+    } finally {
+      checking = false;
+    }
+  };
+  void check();
+  const checkTimer = setInterval(() => void check(), SCHEDULE_CHECK_MS);
   const worker = new Worker(
     QUEUE,
     async (job) => {
@@ -269,6 +307,7 @@ export function startMonitor() {
   worker.on("failed", (job, err) => console.error(`[monitor] ${job?.name ?? "maintenance"} job failed`, err));
   return {
     async close() {
+      clearInterval(checkTimer);
       await Promise.allSettled([worker.close(), queue.close()]);
     },
   };

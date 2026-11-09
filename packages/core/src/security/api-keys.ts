@@ -11,6 +11,9 @@ export interface GeneratedApiKey {
  * Format: tred_live_<32-byte-hex> or tred_test_<32-byte-hex>
  * Returns plaintext key (to show once to the developer), prefix, and SHA-256 hash (to store in DB).
  */
+/** Keys created in test mode carry the tred_test_ prefix (the prefix is part of the hashed token). */
+export const isTestKeyToken = (token: string) => token.startsWith("tred_test_");
+
 export function generateApiKey(isLive: boolean = true): GeneratedApiKey {
   const prefix = isLive ? "tred_live_" : "tred_test_";
   const randomBytes = crypto.randomBytes(24).toString("hex");

@@ -4,7 +4,7 @@ import rateLimit from "@fastify/rate-limit";
 import { env } from "@tredmail/core/config/env";
 import { TREDMAIL_VERSION } from "@tredmail/core/config/version";
 import { prisma } from "@tredmail/db";
-import { redisConnection } from "@tredmail/core/queue/redis";
+import { redisRequests } from "@tredmail/core/queue/request-redis";
 import { hashApiKey } from "@tredmail/core/security/api-keys";
 import { readWorkerHealth } from "@tredmail/core/services/heartbeat";
 import { redactUrl } from "@tredmail/core/security/log-redaction";
@@ -69,7 +69,7 @@ export async function buildServer(options: BuildOptions = {}) {
   // Liveness: the process is up. Readiness: its dependencies answer.
   fastify.get("/health", async () => ({ status: "ok", service: "tredmail-api", version: TREDMAIL_VERSION }));
   fastify.get("/health/ready", async (_request, reply) => {
-    const checks = await Promise.allSettled([prisma.$queryRaw`SELECT 1`, redisConnection.ping()]);
+    const checks = await Promise.allSettled([prisma.$queryRaw`SELECT 1`, redisRequests.ping()]);
     const [database, redis] = checks.map((c) => (c.status === "fulfilled" ? "ok" : "down"));
     const ready = database === "ok" && redis === "ok";
     return reply.status(ready ? 200 : 503).send({ status: ready ? "ready" : "degraded", database, redis });
@@ -77,7 +77,7 @@ export async function buildServer(options: BuildOptions = {}) {
   // For the external uptime monitor: 503 when the delivery worker has not reported in 5
   // minutes. Kept out of /health/ready, which gates container start-up order.
   fastify.get("/health/worker", async (_request, reply) => {
-    const health = await readWorkerHealth(redisConnection).catch(() => null);
+    const health = await readWorkerHealth(redisRequests).catch(() => null);
     if (!health) return reply.status(503).send({ status: "unknown", error: "redis_unreachable" });
     return reply.status(health.status === "ok" ? 200 : 503).send(health);
   });
@@ -86,7 +86,7 @@ export async function buildServer(options: BuildOptions = {}) {
   // ceiling per IP address on top.
   await fastify.register(async (api) => {
     api.addHook("onRequest", async (request, reply) => {
-      if (await withinIpLimit(redisConnection, request.ip, env.RATE_LIMIT_PER_IP_PER_MINUTE)) return;
+      if (await withinIpLimit(redisRequests, request.ip, env.RATE_LIMIT_PER_IP_PER_MINUTE)) return;
       reply.header("Retry-After", String(Math.ceil(retryAfterMs() / 1000)));
       return reply.status(429).send({
         statusCode: 429,
@@ -98,8 +98,10 @@ export async function buildServer(options: BuildOptions = {}) {
     await api.register(rateLimit, {
       max: env.RATE_LIMIT_PER_MINUTE,
       timeWindow: "1 minute",
-      redis: redisConnection,
+      redis: redisRequests,
       nameSpace: "tredmail-rl:",
+      // Redis down: let the request through rather than fail it (the other limits fail open too)
+      skipOnError: true,
       keyGenerator: (request) => {
         const auth = request.headers.authorization;
         return auth?.startsWith("Bearer ") ? `key:${hashApiKey(auth.substring(7))}` : `ip:${request.ip}`;

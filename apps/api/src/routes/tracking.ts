@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { prisma } from "@tredmail/db";
 import { env } from "@tredmail/core/config/env";
-import { redisConnection } from "@tredmail/core/queue/redis";
+import { redisRequests } from "@tredmail/core/queue/request-redis";
 import { createTrackingSigner } from "@tredmail/core/security/tracking-signature";
 import { classifyTrackingHit } from "@tredmail/core/mail/engagement";
 import { dispatchWebhookEvent } from "@tredmail/core/webhooks/dispatcher";
@@ -40,7 +40,7 @@ async function loadTracked(emailId: string) {
 /** One opened webhook per email and reader address a minute: mail clients reload the pixel. */
 async function firstOpenThisMinute(emailId: string, ip: string): Promise<boolean> {
   try {
-    return (await redisConnection.set(`tredmail:opened:${emailId}:${ip}`, "1", "EX", 60, "NX")) === "OK";
+    return (await redisRequests.set(`tredmail:opened:${emailId}:${ip}`, "1", "EX", 60, "NX")) === "OK";
   } catch {
     return true;
   }

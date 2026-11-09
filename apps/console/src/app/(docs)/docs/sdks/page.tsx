@@ -15,8 +15,8 @@ export default function SdksPage() {
       </P>
       <Code
         title="Install"
-        code={`npm run build -w @dovepeak/tredmail                # in the TredMail repository
-npm install /path/to/TredMail/packages/sdk-node    # in your application`}
+        code={`npm run build -w @dovepeak/tredmail && npm pack -w @dovepeak/tredmail   # in the TredMail repository
+npm install ../TredMail/dovepeak-tredmail-1.3.0.tgz                        # in your application`}
       />
       <Code
         title="Usage"
@@ -47,7 +47,7 @@ const bounced = await tredmail.emails.list({ status: ["bounced", "failed"], afte
 
       <H2>Python</H2>
       <P>Python 3.9 or later, standard library only. Install from the repository&apos;s <C>packages/sdk-python</C>:</P>
-      <Code title="Install" code={`pip install /path/to/TredMail/packages/sdk-python`} />
+      <Code title="Install" code={`pip install ../TredMail/packages/sdk-python   # from your application, next to the TredMail repository`} />
       <Code
         title="Usage"
         code={`import os

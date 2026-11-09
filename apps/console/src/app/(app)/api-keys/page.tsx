@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import { Plus } from "lucide-react";
 import { api, errorMessage } from "@/lib/api";
 import { useApi, useWorkspace } from "@/lib/workspace";
-import { Alert, Badge, Button, Card, CopyButton, Dialog, EmptyState, Field, Input, PageHeader, Spinner, Table, formatDate } from "@/components/ui";
+import { Alert, Badge, Button, Card, CopyButton, Dialog, EmptyState, Field, Input, PageHeader, Select, Spinner, Table, formatDate } from "@/components/ui";
 
 interface ApiKeyRow {
   id: string;
@@ -35,6 +35,7 @@ export default function ApiKeysPage() {
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>(["emails:send"]);
   const [expires, setExpires] = useState("");
+  const [mode, setMode] = useState<"live" | "test">("live");
   const [formError, setFormError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [created, setCreated] = useState<{ name: string; token: string } | null>(null);
@@ -53,6 +54,7 @@ export default function ApiKeysPage() {
     setName("");
     setScopes(["emails:send"]);
     setExpires("");
+    setMode("live");
     setFormError(null);
   }
 
@@ -67,7 +69,7 @@ export default function ApiKeysPage() {
     try {
       const result = await api<{ name: string; token: string }>("/v1/api-keys", {
         method: "POST",
-        body: { name, scopes, expires_at: expires ? new Date(`${expires}T23:59:59`).toISOString() : undefined },
+        body: { name, scopes, mode, expires_at: expires ? new Date(`${expires}T23:59:59`).toISOString() : undefined },
       });
       closeCreate();
       setCreated(result);
@@ -161,6 +163,15 @@ export default function ApiKeysPage() {
           {formError && <Alert tone="danger">{formError}</Alert>}
           <Field label="Name" hint="Where it will be used, for example 'billing-service production'.">
             <Input required maxLength={50} value={name} onChange={(e) => setName(e.target.value)} />
+          </Field>
+          <Field
+            label="Mode"
+            hint="A test key validates and records emails but never delivers them, and they do not count against your plan. Use it in development."
+          >
+            <Select value={mode} onChange={(e) => setMode(e.target.value as "live" | "test")}>
+              <option value="live">Live: sends real email</option>
+              <option value="test">Test: nothing is delivered</option>
+            </Select>
           </Field>
           <fieldset>
             <legend className="mb-2 text-sm font-semibold">Permissions</legend>

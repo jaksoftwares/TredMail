@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "@tredmail/db";
 import { env } from "@tredmail/core/config/env";
-import { redisConnection } from "@tredmail/core/queue/redis";
+import { redisRequests } from "@tredmail/core/queue/request-redis";
 import { createVerpCodec } from "@tredmail/core/mail/verp";
 import { recordBounce, recordDeferred, recordDelivered, recordExpired } from "@tredmail/core/services/delivery-events";
 import { handleInboundMessage } from "@tredmail/core/services/inbound-mail";
@@ -133,7 +133,7 @@ export async function mtaRoutes(fastify: FastifyInstance) {
     };
     const outcome = await handleInboundMessage(
       { raw: request.body, envelopeFrom: header("x-envelope-from"), envelopeTo: header("x-envelope-to") },
-      redisConnection,
+      redisRequests,
     );
     request.log.info({ outcome, to: header("x-envelope-to") }, "inbound message handled");
     return reply.status(200).send({ outcome });

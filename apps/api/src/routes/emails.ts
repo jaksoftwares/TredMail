@@ -55,10 +55,24 @@ function accepted(result: Extract<AcceptResult, { ok: true }>) {
     created_at: result.email.createdAt.toISOString(),
     // Recipients left out because they are on the suppression list (the rest were accepted)
     suppressed: result.email.suppressed,
+    // true when sent with a test key: recorded, never delivered
+    test: result.email.test,
   };
 }
 
+const isTestRequest = (request: FastifyRequest) => request.principal?.kind === "api_key" && request.principal.testMode;
+
 async function announce(organizationId: string, result: Extract<AcceptResult, { ok: true }>) {
+  if (result.email.test) {
+    // Test mail is reported as delivered, flagged so integrations can ignore it
+    await dispatchWebhookEvent(organizationId, "email.delivered", {
+      email_id: result.email.id,
+      from: result.email.from,
+      to: result.email.to,
+      test: true,
+    }).catch((err) => console.error("webhook dispatch failed", err));
+    return;
+  }
   await dispatchWebhookEvent(organizationId, result.email.status === "scheduled" ? "email.scheduled" : "email.queued", {
     email_id: result.email.id,
     from: result.email.from,
@@ -80,7 +94,7 @@ export async function sendBatch(request: FastifyRequest, reply: FastifyReply) {
     const orgId = request.organization!.id;
     const data = [];
     for (const item of parseResult.data) {
-      const result = await acceptEmail(orgId, item);
+      const result = await acceptEmail(orgId, item, { testMode: isTestRequest(request) });
       if (result.ok) {
         await announce(orgId, result);
         data.push(accepted(result));
@@ -122,7 +136,7 @@ export async function emailRoutes(fastify: FastifyInstance) {
     withIdempotency(request, reply, async () => {
       const parseResult = sendEmailSchema.safeParse(request.body);
       if (!parseResult.success) return validationError("Invalid email payload.", parseResult.error.issues);
-      const result = await acceptEmail(request.organization!.id, parseResult.data);
+      const result = await acceptEmail(request.organization!.id, parseResult.data, { testMode: isTestRequest(request) });
       if (!result.ok) return failure(result);
       await announce(request.organization!.id, result);
       return { statusCode: 200, body: accepted(result) };

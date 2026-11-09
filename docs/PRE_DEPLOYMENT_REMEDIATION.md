@@ -470,17 +470,17 @@ All of the following must hold on staging, then be repeated on production before
 - [x] B6 one-click unsubscribe
 
 **Phase 6:**
-- [ ] M1 relay validation
-- [ ] M2 split messages
-- [ ] M3 Message-ID claims
+- [x] M1 relay validation
+- [x] M2 split messages
+- [x] M3 Message-ID claims
 
 **Phase 7:**
 - [ ] H4 sending approval
 - [ ] L3 workspace limit
 
 **Phase 8:**
-- [ ] M9 test mode
-- [ ] B7 published SDKs
+- [x] M9 test mode
+- [ ] B7 published SDKs (the package is no longer private and the docs install from the repository; the npm publish is still to do)
 
 **Phase 9:**
 - [ ] F3 domain-scoped keys
@@ -669,3 +669,54 @@ and sent no webhook, while a person's click and open each sent one; GET on the u
 changed nothing, POST suppressed the reader once (a second POST sent no second webhook) and the
 next email to them was refused; a recipient suppressed after a scheduled email was accepted was
 dropped at send time while the other recipient received it.
+
+### Phase 6 (9 November 2026)
+
+- **M1.** The SMTP relay checks every request with the API's `sendEmailSchema`. A failure is a
+  permanent `554 5.6.0` carrying the first issue, so a client does not retry it forever.
+- **M2.** A split message (Bcc only, one email per recipient) is checked part by part before any
+  part is accepted (`prepareSend`). The plan's quota is reserved once for the accepted parts, and
+  the parts are then saved and queued (`commitSend`). When at least one part is accepted, the
+  parts that were refused are recorded as `FAILED` emails, which show in the console and fire
+  `email.failed`, and the client gets `250`. A refused part is recorded only when its sender
+  domain is registered in the workspace; otherwise the refusal is logged.
+- **M3.** A Message-ID claim that is finished is answered as a duplicate. One that is unfinished
+  and younger than 5 minutes gets `451` (the first attempt is still running). An older unfinished
+  claim is taken over, because that attempt has died.
+
+Verified end to end with real SMTP clients against Postgres and Redis (12 checks): a split
+message with one suppressed recipient was accepted with two parts queued and one recorded as
+failed; an invalid schedule header was refused permanently; a retry during the first attempt got
+`451`; a stale claim was taken over; a finished claim was answered as a duplicate.
+
+### Phase 8 (9 November 2026)
+
+- **M9.** A `tred_test_` key validates and records each email, but nothing is delivered. The
+  email is stored as `DELIVERED` with `isTest` set and a `TEST_MODE` event, it does not count
+  against the plan, it is left out of the statistics, and webhooks carry `test: true` (a test
+  email fires `email.delivered`). Keys are created live or test with `mode` on
+  `POST /v1/api-keys`, and the console's create-key form has a Live/Test choice. Documented on
+  the sending page. The schema change is migration `20261110000000_test_mode`.
+
+Verified through the API (live and test keys, usage and statistics) and through the SMTP relay
+(5 and 4 checks respectively).
+
+### Pre-launch audit fixes (9 November 2026)
+
+Fixes for the audit in `docs/production-gaps.md`, outside the remediation list above:
+
+- **Launch blockers 1–4:** blank configuration values (`OPS_EMAIL`, `BILLING_SUPPORT_EMAIL`,
+  `MTA_WARMUP_START`) no longer fail validation; the worker accepts KumoMTA's internal port
+  without STARTTLS when `SMTP_SKIP_STARTTLS` is set (production, `kumomta` host only); the
+  onboarding page refreshes the cached workspace list before opening the console.
+- **Blockers 5–8:** DEGRADED domains can send from the API; the API and relay use a Redis
+  connection that fails at once during an outage (`request-redis.ts`), and enqueueing is capped at
+  2 seconds; the maintenance schedules are re-created within a minute after a Redis loss; the
+  outbox sweeper re-queues stale SENDING rows (the reception check prevents a duplicate send).
+- **Smaller issues:** the worker never overwrites a delivery report with `SENT`; the smoke test
+  turns tracking on explicitly; `.gitignore` covers `certs/`, `*.pem`, `*.key` and `.env.*`; the
+  README no longer claims marketing email; the Node SDK is no longer marked private and the docs
+  show repository-relative install paths.
+- **Blank values:** `loadEnv` treats any blank variable as unset, so a copied `.env.example` loads.
+
+The unit suite passes (138 tests), and typecheck and lint are clean.

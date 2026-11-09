@@ -1,6 +1,6 @@
 import { env } from "@tredmail/core/config/env";
 import { prisma } from "@tredmail/db";
-import { redisConnection } from "@tredmail/core/queue/redis";
+import { redisRequests } from "@tredmail/core/queue/request-redis";
 import { buildServer } from "./app.js";
 
 async function main() {
@@ -9,7 +9,7 @@ async function main() {
   const shutdown = async (signal: string) => {
     fastify.log.info({ signal }, "shutting down");
     await fastify.close();
-    await Promise.allSettled([prisma.$disconnect(), redisConnection.quit()]);
+    await Promise.allSettled([prisma.$disconnect(), redisRequests.quit()]);
     process.exit(0);
   };
   process.on("SIGTERM", () => void shutdown("SIGTERM"));

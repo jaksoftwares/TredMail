@@ -26,6 +26,8 @@ x-backend-env: &backend-env
   SMTP_HOST: ${SMTP_HOST:-kumomta}
   SMTP_PORT: ${SMTP_PORT:-2525}
   SMTP_SECURE: ${SMTP_SECURE:-false}
+  # true for kumomta (set by deploy-hostinger.sh): its internal port has no certificate of its own
+  SMTP_SKIP_STARTTLS: ${SMTP_SKIP_STARTTLS:-false}
   LOG_LEVEL: ${LOG_LEVEL:-info}
   MTA_HOSTNAME: ${MTA_HOSTNAME:-mta1.tredmail.dovepeakdigital.com}
   # Alerts and forwarded postmaster@/abuse@/dmarc@ mail go here

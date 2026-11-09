@@ -2,11 +2,11 @@ import type { FastifyRequest, FastifyReply, preHandlerHookHandler } from "fastif
 import crypto from "crypto";
 import { fromNodeHeaders } from "better-auth/node";
 import { prisma } from "@tredmail/db";
-import { hashApiKey } from "@tredmail/core/security/api-keys";
+import { hashApiKey, isTestKeyToken } from "@tredmail/core/security/api-keys";
 import { hasScope, type ApiScope } from "@tredmail/core/security/scopes";
 import { ROLE_SCOPES, canManageMembers, type WorkspaceRole } from "@tredmail/core/security/roles";
 import { env } from "@tredmail/core/config/env";
-import { redisConnection } from "@tredmail/core/queue/redis";
+import { redisRequests } from "@tredmail/core/queue/request-redis";
 import { recordAuthFailure, retryAfterMs, tooManyAuthFailures } from "@tredmail/core/security/ip-limits";
 import { auth } from "../auth.js";
 
@@ -14,7 +14,7 @@ import { auth } from "../auth.js";
 export const WORKSPACE_HEADER = "x-tredmail-workspace";
 
 export type Principal =
-  | { kind: "api_key"; apiKeyId: string; name: string; scopes: string[] }
+  | { kind: "api_key"; apiKeyId: string; name: string; scopes: string[]; testMode: boolean }
   | { kind: "user"; userId: string; email: string; role: WorkspaceRole; scopes: string[] };
 
 export interface SessionUser {
@@ -68,7 +68,7 @@ async function loadSessionUser(request: FastifyRequest): Promise<SessionUser | n
 }
 
 async function authenticateWithApiKey(request: FastifyRequest, reply: FastifyReply, token: string) {
-  if (await tooManyAuthFailures(redisConnection, request.ip)) {
+  if (await tooManyAuthFailures(redisRequests, request.ip)) {
     reply.header("Retry-After", String(Math.ceil(retryAfterMs() / 1000)));
     return fail(reply, 429, "rate_limit_exceeded", "Too many requests with invalid API keys from your address. Try again in a minute.");
   }
@@ -79,7 +79,7 @@ async function authenticateWithApiKey(request: FastifyRequest, reply: FastifyRep
     : null;
 
   if (!apiKey || apiKey.revokedAt) {
-    await recordAuthFailure(redisConnection, request.ip);
+    await recordAuthFailure(redisRequests, request.ip);
     return fail(reply, 401, "unauthorized", "Invalid API key provided.");
   }
   if (apiKey.expiresAt && apiKey.expiresAt <= new Date()) {
@@ -96,7 +96,7 @@ async function authenticateWithApiKey(request: FastifyRequest, reply: FastifyRep
     slug: apiKey.organization.slug,
     isCommercial: apiKey.organization.isCommercial,
   };
-  request.principal = { kind: "api_key", apiKeyId: apiKey.id, name: apiKey.name, scopes: apiKey.scopes };
+  request.principal = { kind: "api_key", apiKeyId: apiKey.id, name: apiKey.name, scopes: apiKey.scopes, testMode: isTestKeyToken(token) };
 }
 
 /**

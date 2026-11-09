@@ -62,6 +62,9 @@ async function main() {
       subject: `TredMail smoke test ${marker}`,
       html: `<html><body><p>${marker}</p><p><a href="https://dovepeakdigital.com/?ref=${marker}">Open</a></p></body></html>`,
       text: marker,
+      // Tracking is off by default; the smoke test checks the tracking links, so it turns it on
+      track_opens: true,
+      track_clicks: true,
     }),
   });
   assert.equal(send.status, 200, `send failed: ${JSON.stringify(send.body)}`);

@@ -20,7 +20,8 @@ export async function statsRoutes(fastify: FastifyInstance) {
     const orgId = request.organization!.id;
 
     const [byStatus, uniqueOpens, uniqueClicks, recentEmails] = await Promise.all([
-      prisma.email.groupBy({ by: ["status"], where: { organizationId: orgId }, _count: { _all: true } }),
+      // Test-mode mail (tred_test_ keys) is left out of the metrics
+      prisma.email.groupBy({ by: ["status"], where: { organizationId: orgId, isTest: false }, _count: { _all: true } }),
       prisma.emailEvent.findMany({
         where: { type: "OPENED", bot: false, email: { organizationId: orgId } },
         distinct: ["emailId"],

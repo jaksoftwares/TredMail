@@ -335,6 +335,8 @@ model Email {
   mtaAcceptedAt   DateTime?
   // TredMail's one-click unsubscribe headers are added (unsubscribe: true)
   unsubscribeLink Boolean       @default(false)
+  /// Sent with a test key: validated and recorded, never delivered, not counted against the plan
+  isTest           Boolean       @default(false)
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -445,6 +447,7 @@ enum EmailEventType {
   BOUNCED
   COMPLAINED
   UNSUBSCRIBED // The recipient used the one-click unsubscribe link
+  TEST_MODE // Accepted with a test key: never delivered
 }
 
 model EmailEvent {

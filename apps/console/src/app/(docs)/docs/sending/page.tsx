@@ -124,6 +124,13 @@ export default function SendingPage() {
           [<C key="5">rate_limit_exceeded</C>, "Too many requests (429). Retry after a short wait."],
         ]}
       />
+      <H2>Test mode</H2>
+      <P>
+        A test key (created with Mode set to Test on the API keys page, and starting <C>tred_test_</C>) runs the same checks as a live key: the
+        request is validated, the sender domain and suppressions are applied, and the email is recorded. Nothing is delivered. The email is
+        stored as delivered, flagged as a test, does not count against your plan or your statistics, and fires webhooks with <C>test: true</C>.
+        Use it in development and in automated tests.
+      </P>
       <Note>All endpoints and fields are in the <Link href="/docs/api" className="font-semibold underline">API reference</Link>.</Note>
     </>
   );

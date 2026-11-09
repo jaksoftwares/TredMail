@@ -4,10 +4,18 @@ import { SMTPServer, type SMTPServerAuthentication, type SMTPServerOptions, type
 import { simpleParser } from "mailparser";
 import { prisma } from "@tredmail/db";
 import { env } from "@tredmail/core/config/env";
-import { redisConnection } from "@tredmail/core/queue/redis";
-import { hashApiKey } from "@tredmail/core/security/api-keys";
+import { redisRequests } from "@tredmail/core/queue/request-redis";
+import { hashApiKey, isTestKeyToken } from "@tredmail/core/security/api-keys";
 import { hasScope } from "@tredmail/core/security/scopes";
-import { acceptEmail } from "@tredmail/core/services/email-service";
+import { sendEmailSchema, type SendEmailInput } from "@tredmail/core/services/email-validation";
+import {
+  commitSend,
+  prepareSend,
+  recordRefusedEmail,
+  type AcceptResult,
+  type PreparedSend,
+} from "@tredmail/core/services/email-service";
+import { releaseUsage, reserveUsage } from "@tredmail/core/billing/usage";
 import { dispatchWebhookEvent } from "@tredmail/core/webhooks/dispatcher";
 import { toSendRequests } from "./convert.js";
 
@@ -30,18 +38,21 @@ const AUTH_LOCK_SECONDS = 15 * 60;
 interface AuthedUser {
   organizationId: string;
   apiKeyId: string;
+  /** A tred_test_ key: messages are validated and recorded, never delivered */
+  testMode: boolean;
 }
 
 const smtpError = (code: number, message: string) => Object.assign(new Error(message), { responseCode: code });
 
+// Fail open, like the API's limits: an unreachable Redis must not lock out every sender.
 async function authFailuresFor(ip: string) {
-  return Number((await redisConnection.get(`tredmail:smtp-auth-fail:${ip}`)) ?? 0);
+  return Number((await redisRequests.get(`tredmail:smtp-auth-fail:${ip}`).catch(() => null)) ?? 0);
 }
 
 async function recordAuthFailure(ip: string) {
   const key = `tredmail:smtp-auth-fail:${ip}`;
-  const count = await redisConnection.incr(key);
-  if (count === 1) await redisConnection.expire(key, AUTH_LOCK_SECONDS);
+  const count = await redisRequests.incr(key).catch(() => 0);
+  if (count === 1) await redisRequests.expire(key, AUTH_LOCK_SECONDS).catch(() => undefined);
 }
 
 async function authenticate(auth: SMTPServerAuthentication, session: SMTPServerSession): Promise<AuthedUser> {
@@ -62,7 +73,7 @@ async function authenticate(auth: SMTPServerAuthentication, session: SMTPServerS
     throw smtpError(535, "5.7.8 This API key lacks the emails:send scope.");
   }
   prisma.apiKey.update({ where: { id: apiKey.id }, data: { lastUsedAt: new Date() } }).catch(() => undefined);
-  return { organizationId: apiKey.organizationId, apiKeyId: apiKey.id };
+  return { organizationId: apiKey.organizationId, apiKeyId: apiKey.id, testMode: isTestKeyToken(token) };
 }
 
 /** Maps an API rejection to an SMTP reply: temporary conditions are 4xx so clients retry. */
@@ -73,55 +84,127 @@ function smtpReplyFor(statusCode: number, error: string, message: string) {
   return smtpError(554, `5.6.0 ${error}: ${message}`);
 }
 
+/** An unfinished claim older than this means its first attempt died, so the claim can be taken over. */
+const STALE_CLAIM_MS = 5 * 60_000;
+
 /**
  * A client that times out after DATA retries the same message. The Message-ID makes the
- * retry a no-op for 24 hours (same store as the API's Idempotency-Key).
+ * retry a no-op for 24 hours (same store as the API's Idempotency-Key). While the first attempt
+ * is still running, the retry is asked to come back later: it must not be answered as accepted,
+ * because the first attempt can still fail and release its claim.
  */
-async function claimMessageId(organizationId: string, messageId: string | undefined, raw: Buffer) {
+async function claimMessageId(
+  organizationId: string,
+  messageId: string | undefined,
+  raw: Buffer,
+): Promise<{ duplicateOf: string[] | null; recordId: string | null }> {
   if (!messageId) return { duplicateOf: null, recordId: null };
   const key = `smtp:${messageId}`.slice(0, 256);
   const requestHash = crypto.createHash("sha256").update(raw).digest("hex");
   const inserted = await prisma.idempotencyKey.createMany({ data: [{ organizationId, key, requestHash }], skipDuplicates: true });
   const record = await prisma.idempotencyKey.findUniqueOrThrow({ where: { organizationId_key: { organizationId, key } } });
   if (inserted.count === 1) return { duplicateOf: null, recordId: record.id };
-  const ids = (record.response as { ids?: string[] } | null)?.ids;
-  return { duplicateOf: ids ?? [], recordId: null };
+  // Finished: a duplicate, answered with the ids the message was accepted under
+  if (record.statusCode !== null) {
+    const ids = (record.response as { ids?: string[] } | null)?.ids;
+    return { duplicateOf: ids ?? [], recordId: null };
+  }
+  // Unfinished and recent: the first attempt is still running
+  if (Date.now() - record.createdAt.getTime() < STALE_CLAIM_MS) {
+    throw smtpError(451, "4.3.0 The first attempt for this message is still being processed. Retry later.");
+  }
+  // Unfinished for too long: that attempt died. Take the claim over (the delete must succeed,
+  // or the retry below would loop).
+  await prisma.idempotencyKey.delete({ where: { id: record.id } });
+  return claimMessageId(organizationId, messageId, raw);
 }
 
-// smtp-server keeps the authenticated user as a string: "<workspace id>:<api key id>"
-const encodeUser = (user: AuthedUser) => `${user.organizationId}:${user.apiKeyId}`;
+// smtp-server keeps the authenticated user as a string: "<workspace id>:<api key id>:<test 1|0>"
+const encodeUser = (user: AuthedUser) => `${user.organizationId}:${user.apiKeyId}:${user.testMode ? 1 : 0}`;
 const decodeUser = (value: string): AuthedUser => {
-  const [organizationId, apiKeyId] = value.split(":");
-  return { organizationId, apiKeyId };
+  const [organizationId, apiKeyId, test] = value.split(":");
+  return { organizationId, apiKeyId, testMode: test === "1" };
 };
 
-async function handleMessage(raw: Buffer, session: SMTPServerSession): Promise<string> {
-  const user = decodeUser(session.user ?? "");
-  const parsed = await simpleParser(raw, { skipImageLinks: true, skipTextToHtml: true });
-  const claim = await claimMessageId(user.organizationId, parsed.messageId, raw);
-  if (claim.duplicateOf) return `2.0.0 Already accepted ${claim.duplicateOf.join(",")}`;
-
-  const requests = toSendRequests(parsed, {
-    mailFrom: session.envelope.mailFrom ? session.envelope.mailFrom.address : "",
-    rcptTo: session.envelope.rcptTo.map((r) => r.address),
-  });
-  const ids: string[] = [];
-  try {
-    for (const request of requests) {
-      const result = await acceptEmail(user.organizationId, request);
-      if (!result.ok) {
-        // Nothing of this message was sent yet only if it was the first part
-        if (ids.length === 0) throw smtpReplyFor(result.statusCode, result.error, result.message);
-        console.warn(`[smtp] part of a split message was refused: ${result.error}`);
-        continue;
-      }
-      ids.push(result.email.id);
-      await dispatchWebhookEvent(user.organizationId, result.email.status === "scheduled" ? "email.scheduled" : "email.queued", {
+/** Announces an accepted part on the same events the API uses (test mail is reported as delivered). */
+const announceSmtp = (organizationId: string, result: Extract<AcceptResult, { ok: true }>) =>
+  result.email.test
+    ? dispatchWebhookEvent(organizationId, "email.delivered", {
         email_id: result.email.id,
         from: result.email.from,
         to: result.email.to,
         source: "smtp",
-      }).catch(() => undefined);
+        test: true,
+      })
+    : dispatchWebhookEvent(organizationId, result.email.status === "scheduled" ? "email.scheduled" : "email.queued", {
+        email_id: result.email.id,
+        from: result.email.from,
+        to: result.email.to,
+        source: "smtp",
+      });
+
+async function handleMessage(raw: Buffer, session: SMTPServerSession): Promise<string> {
+  const user = decodeUser(session.user ?? "");
+  const parsed = await simpleParser(raw, { skipImageLinks: true, skipTextToHtml: true });
+  const requests = toSendRequests(parsed, {
+    mailFrom: session.envelope.mailFrom ? session.envelope.mailFrom.address : "",
+    rcptTo: session.envelope.rcptTo.map((r) => r.address),
+  });
+
+  // The same rules as the API. A request that breaks them is a permanent error, so the client
+  // does not retry it forever.
+  const payloads: SendEmailInput[] = [];
+  for (const request of requests) {
+    const valid = sendEmailSchema.safeParse(request);
+    if (!valid.success) {
+      const issue = valid.error.issues[0];
+      throw smtpError(554, `5.6.0 ${issue.path.join(".")}: ${issue.message}`);
+    }
+    payloads.push(valid.data);
+  }
+  if (payloads.length === 0) throw smtpError(554, "5.1.3 No recipients");
+
+  const claim = await claimMessageId(user.organizationId, parsed.messageId, raw);
+  if (claim.duplicateOf) return `2.0.0 Already accepted ${claim.duplicateOf.join(",")}`;
+
+  const ids: string[] = [];
+  try {
+    // Check every part before accepting any. When at least one part is accepted, the parts that
+    // were refused are recorded as FAILED, so they show in the console, and the client gets 250.
+    const accepted: PreparedSend[] = [];
+    const refused: Array<{ payload: SendEmailInput; statusCode: number; error: string; message: string }> = [];
+    for (const payload of payloads) {
+      const checked = await prepareSend(user.organizationId, payload, { testMode: user.testMode });
+      if (checked.ok) accepted.push(checked.prepared);
+      else refused.push({ payload, statusCode: checked.statusCode, error: checked.error, message: checked.message });
+    }
+    if (accepted.length === 0) {
+      const first = refused[0];
+      throw smtpReplyFor(first.statusCode, first.error, first.message);
+    }
+
+    // The plan's quota for all accepted parts at once: if it cannot take them, nothing is accepted
+    const charge = accepted.reduce((total, part) => total + part.chargeable, 0);
+    const usage = charge > 0 ? await reserveUsage(user.organizationId, charge) : null;
+    if (usage && !usage.ok) throw smtpReplyFor(usage.statusCode, usage.error, usage.message);
+
+    for (const prepared of accepted) {
+      try {
+        const result = await commitSend(prepared);
+        ids.push(result.email.id);
+        await announceSmtp(user.organizationId, result).catch(() => undefined);
+      } catch (err) {
+        // Not saved: give back its quota. The other parts are still accepted.
+        if (usage?.ok && prepared.chargeable > 0) await releaseUsage(user.organizationId, prepared.chargeable, usage.day);
+        console.error("[smtp] a part of a split message could not be saved", err);
+      }
+    }
+    if (ids.length === 0) throw smtpError(451, "4.3.0 Temporary failure, try again");
+
+    for (const part of refused) {
+      await recordRefusedEmail(user.organizationId, part.payload, { error: part.error, message: part.message }, { testMode: user.testMode }).catch(
+        (err) => console.error("[smtp] could not record a refused part", err),
+      );
     }
   } catch (err) {
     if (claim.recordId) await prisma.idempotencyKey.delete({ where: { id: claim.recordId } }).catch(() => undefined);
@@ -225,7 +308,7 @@ const certTimer = setInterval(() => {
 const shutdown = async () => {
   clearInterval(certTimer);
   await Promise.allSettled(servers.map((s) => new Promise<void>((resolve) => s.close(() => resolve()))));
-  await Promise.allSettled([prisma.$disconnect(), redisConnection.quit()]);
+  await Promise.allSettled([prisma.$disconnect(), redisRequests.quit()]);
   process.exit(0);
 };
 process.on("SIGTERM", () => void shutdown());

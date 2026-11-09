@@ -38,7 +38,7 @@ const transporter = nodemailer.createTransport({
   host: env.SMTP_HOST,
   port: env.SMTP_PORT,
   secure: env.SMTP_SECURE,
-  ignoreTLS: env.NODE_ENV === "development" && !env.SMTP_SECURE,
+  ignoreTLS: env.SMTP_SKIP_STARTTLS || (env.NODE_ENV === "development" && !env.SMTP_SECURE),
   auth: env.SMTP_USER ? { user: env.SMTP_USER, pass: env.SMTP_PASS } : undefined,
   tls: { rejectUnauthorized: !env.SMTP_ALLOW_INVALID_CERTS },
 });
@@ -119,9 +119,15 @@ async function markSent(email: { id: string; organizationId: string; to: string[
   const sentAt = new Date();
   await persist(() =>
     prisma.$transaction([
+      // Only moves the status forward from a pre-send state: KumoMTA can report DELIVERED (or a
+      // bounce) before this write runs, and that report must not be overwritten with SENT.
+      prisma.email.updateMany({
+        where: { id: email.id, status: { in: ["QUEUED", "SCHEDULED", "SENDING"] } },
+        data: { status: "SENT" },
+      }),
       prisma.email.update({
         where: { id: email.id },
-        data: { status: "SENT", messageId: result.messageId, smtpResponse: result.response, sendAttemptAt: null },
+        data: { messageId: result.messageId, smtpResponse: result.response, sendAttemptAt: null },
       }),
       prisma.emailEvent.create({
         data: {

@@ -39,3 +39,10 @@ Thumbs.db
 # Python SDK
 __pycache__/
 *.egg-info/
+
+# Secrets and key material
+.env.*
+!.env.example
+certs/
+*.pem
+*.key

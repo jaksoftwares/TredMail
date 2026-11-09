@@ -1,5 +1,5 @@
 import { Queue } from "bullmq";
-import { redisConnection } from "./redis.js";
+import { REDIS_REQUEST_TIMEOUT_MS, redisConnection } from "./redis.js";
 import { EMAIL_MAX_ATTEMPTS } from "../delivery/attempts.js";
 
 /**
@@ -44,13 +44,29 @@ const queueFor = (priority: EmailPriorityName = "NORMAL") => (priority === "SYST
  */
 export async function enqueueEmail(data: EmailJobData, sendAt?: Date | null, priority: EmailPriorityName = "NORMAL") {
   const delay = sendAt ? Math.max(0, sendAt.getTime() - Date.now()) : 0;
-  return await queueFor(priority).add(`deliver:${data.emailId}`, data, { jobId: data.emailId, delay });
+  return await withQueueTimeout(queueFor(priority).add(`deliver:${data.emailId}`, data, { jobId: data.emailId, delay }));
 }
 
 /** Removes an email's waiting or delayed job (when it is canceled or rescheduled). */
 export async function removeQueuedEmail(emailId: string) {
-  for (const queue of [emailQueue, systemEmailQueue]) {
-    const job = await queue.getJob(emailId);
-    if (job && !(await job.isActive())) await job.remove();
-  }
+  await withQueueTimeout(
+    (async () => {
+      for (const queue of [emailQueue, systemEmailQueue]) {
+        const job = await queue.getJob(emailId);
+        if (job && !(await job.isActive())) await job.remove();
+      }
+    })(),
+  );
+}
+
+/**
+ * Queue commands on the worker's connection wait while Redis is down, so a request that queues
+ * mail must not wait with them. The caller falls back: the outbox sweeper queues the email later.
+ */
+function withQueueTimeout<T>(command: Promise<T>, ms = REDIS_REQUEST_TIMEOUT_MS): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Redis did not answer within ${ms} ms`)), ms);
+  });
+  return Promise.race([command, timeout]).finally(() => clearTimeout(timer));
 }

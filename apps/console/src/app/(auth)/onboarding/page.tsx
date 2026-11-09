@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
+import { mutate } from "swr";
 import { WORKSPACE_STORAGE_KEY, api, ApiError, errorMessage } from "@/lib/api";
 import { Alert, Button, Field, Input, Spinner, Textarea } from "@/components/ui";
 
@@ -42,6 +43,9 @@ export default function OnboardingPage() {
       } catch {
         // ignore unavailable storage
       }
+      // The app shell reads the cached /v1/me, which still lists no workspaces, and would send
+      // the user straight back here. Refresh it first so /overview sees the new workspace.
+      await mutate("/v1/me").catch(() => undefined);
       router.replace("/overview");
     } catch (err) {
       setError(errorMessage(err));
