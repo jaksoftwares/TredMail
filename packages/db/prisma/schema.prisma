@@ -42,6 +42,9 @@ model Organization {
   // Automatic circuit breaker (bounce or complaint rate too high). Staff resume it.
   sendingPausedAt    DateTime?
   sendingPauseReason String?
+  /// Staff approved the workspace to send without the unapproved daily limit (see UNAPPROVED_DAILY_EMAIL_LIMIT)
+  sendingApprovedAt        DateTime?
+  sendingReviewRequestedAt DateTime?
 
   // Open and click tracking for emails that do not say (track_opens / track_clicks). Off for
   // new workspaces: tracking rewrites links and adds a pixel, which customers opt into.

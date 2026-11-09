@@ -17,6 +17,9 @@ interface WorkspaceDetail {
   website: string | null;
   trackOpensDefault: boolean;
   trackClicksDefault: boolean;
+  sendingApproved: boolean;
+  sendingReviewRequestedAt: string | null;
+  unapprovedDailyLimit: number | null;
 }
 
 export default function GeneralSettingsPage() {
@@ -29,6 +32,8 @@ export default function GeneralSettingsPage() {
   const [trackClicks, setTrackClicks] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [requesting, setRequesting] = useState(false);
+  const [reviewResult, setReviewResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   useEffect(() => {
     if (!data) return;
@@ -40,6 +45,20 @@ export default function GeneralSettingsPage() {
   }, [data]);
 
   if (!data) return <Spinner />;
+
+  async function requestReview() {
+    setRequesting(true);
+    setReviewResult(null);
+    try {
+      await api("/v1/workspace/request-review", { method: "POST" });
+      await mutate();
+      setReviewResult({ ok: true, message: "Review requested. We check new workspaces and will be in touch." });
+    } catch (err) {
+      setReviewResult({ ok: false, message: errorMessage(err) });
+    } finally {
+      setRequesting(false);
+    }
+  }
 
   async function onSave(e: FormEvent) {
     e.preventDefault();
@@ -104,6 +123,32 @@ export default function GeneralSettingsPage() {
           </Link>
         )}
         <p className="mt-3 text-xs text-subtle">Workspace ID: <span className="font-mono">{data.id}</span></p>
+      </Card>
+      <Card className="h-fit p-5 text-sm">
+        <h2 className="mb-3 font-bold">Sending approval</h2>
+        {data.sendingApproved ? (
+          <>
+            <Badge tone="accent">Approved</Badge>
+            <p className="mt-3 text-muted">This workspace can send from its own domains without the new-workspace daily limit.</p>
+          </>
+        ) : (
+          <>
+            <p className="text-muted">
+              New workspaces can send from their own domains up to {data.unapprovedDailyLimit?.toLocaleString("en-US") ?? "a few hundred"} emails a day until
+              we have reviewed them. This protects the shared sending IP for every customer.
+            </p>
+            {data.sendingReviewRequestedAt ? (
+              <p className="mt-3 text-muted">Review requested on {new Date(data.sendingReviewRequestedAt).toLocaleDateString("en-GB")}.</p>
+            ) : (
+              can.manageMembers && (
+                <Button className="mt-3" size="sm" loading={requesting} onClick={requestReview}>
+                  Request review
+                </Button>
+              )
+            )}
+            {reviewResult && <Alert tone={reviewResult.ok ? "success" : "danger"}>{reviewResult.message}</Alert>}
+          </>
+        )}
       </Card>
     </div>
   );

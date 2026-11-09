@@ -205,6 +205,7 @@ export default function AdminWorkspacePage() {
             {!w.is_commercial && <Badge tone="info">Dovepeak internal</Badge>}
             {w.suspended_at && <Badge tone="danger">suspended</Badge>}
             {w.sending_paused_at && <Badge tone="danger">sending paused</Badge>}
+            {w.is_commercial && !w.sending_approved_at && <Badge tone="warning">sending not approved</Badge>}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -213,6 +214,11 @@ export default function AdminWorkspacePage() {
           <Button variant="secondary" size="sm" onClick={() => setAction("invoice")}>Create invoice</Button>
           <Button variant="secondary" size="sm" onClick={() => setAction("credit")}>Adjust credit</Button>
           {w.sending_paused_at && <Button size="sm" onClick={() => quick("Sending resumed.", () => api(`/v1/admin/workspaces/${w.id}/resume-sending`, { method: "POST" }))}>Resume sending</Button>}
+          {w.is_commercial && !w.sending_approved_at && (
+            <Button size="sm" onClick={() => quick("Sending approved.", () => api(`/v1/admin/workspaces/${w.id}/approve-sending`, { method: "POST" }))}>
+              Approve sending
+            </Button>
+          )}
           {w.suspended_at ? (
             <Button size="sm" onClick={() => quick("Suspension lifted.", () => api(`/v1/admin/workspaces/${w.id}/unsuspend`, { method: "POST" }))}>Lift suspension</Button>
           ) : (

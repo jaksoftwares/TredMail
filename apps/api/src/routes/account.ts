@@ -5,6 +5,12 @@ import { prisma } from "@tredmail/db";
 import { env, PLATFORM_ORG_SLUG } from "@tredmail/core/config/env";
 import { WORKSPACE_ROLES, canAssignRole, canChangeMember, type WorkspaceRole } from "@tredmail/core/security/roles";
 import { recordAudit } from "@tredmail/core/services/audit";
+import {
+  UNAPPROVED_WORKSPACE_LIMIT,
+  needsSendingApproval,
+  requestSendingReview,
+  workspaceLimitReached,
+} from "@tredmail/core/services/sending-approval";
 import { acceptEmail } from "@tredmail/core/services/email-service";
 import { sendSystemEmail } from "@tredmail/core/services/system-mailer";
 import { invitationTemplate, sandboxWelcomeTemplate } from "@tredmail/core/mail/templates";
@@ -139,6 +145,15 @@ export async function accountRoutes(fastify: FastifyInstance) {
       return reply.status(403).send({ statusCode: 403, error: "email_not_verified", message: "Verify your email first." });
     }
 
+    // L3: until one of their workspaces is approved, a user may own only a few workspaces
+    if (await workspaceLimitReached(user.id)) {
+      return reply.status(403).send({
+        statusCode: 403,
+        error: "workspace_limit_reached",
+        message: `You can own up to ${UNAPPROVED_WORKSPACE_LIMIT} workspaces until one of them is approved for sending. Request a review of one of them to lift the limit.`,
+      });
+    }
+
     const organization = await prisma.organization.create({
       data: {
         name: parsed.data.name,
@@ -244,12 +259,21 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
         sendingPauseReason: true,
         trackOpensDefault: true,
         trackClicksDefault: true,
+        isCommercial: true,
+        sendingApprovedAt: true,
+        sendingReviewRequestedAt: true,
       },
     });
     const { entitlements } = await getEntitlements(org.id);
     const principal = request.principal!;
+    const { isCommercial, sendingApprovedAt, sendingReviewRequestedAt, ...details } = org;
+    const awaitingApproval = needsSendingApproval({ isCommercial, sendingApprovedAt });
     return {
-      ...org,
+      ...details,
+      // H4: until staff approve sending, the workspace may send this many emails a day from its own domains
+      sendingApproved: !awaitingApproval,
+      sendingReviewRequestedAt: sendingReviewRequestedAt ?? null,
+      unapprovedDailyLimit: awaitingApproval ? env.UNAPPROVED_DAILY_EMAIL_LIMIT : null,
       plan: entitlements.planId,
       planName: entitlements.planName,
       monthlyQuota: entitlements.monthlyEmails,
@@ -282,6 +306,17 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
       ipAddress: request.ip,
     });
     return { id: org.id, name: org.name, slug: org.slug };
+  });
+
+  // POST /v1/workspace/request-review - Ask staff to approve sending from the workspace's own domains
+  fastify.post("/workspace/request-review", { preHandler: requireMemberManager }, async (request, reply) => {
+    const principal = request.principal;
+    if (principal?.kind !== "user") return reply.status(403).send({ statusCode: 403, error: "forbidden", message: "Sign in to request a review." });
+    const result = await requestSendingReview(request.organization!.id, principal.userId, request.ip);
+    if (!result.ok) {
+      return reply.status(409).send({ statusCode: 409, error: result.error, message: "Sending is already approved for this workspace." });
+    }
+    return { requested_at: result.requestedAt.toISOString(), already_requested: result.alreadyRequested };
   });
 
   // GET /v1/members

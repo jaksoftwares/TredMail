@@ -8,7 +8,7 @@ import { enqueueEmail } from "@tredmail/core/queue/email.queue";
 import { queueWebhookDelivery } from "@tredmail/core/webhooks/dispatcher";
 import { runBillingCycle } from "@tredmail/core/billing/cycle";
 import { reconcilePendingPayments } from "@tredmail/core/billing/service";
-import { checkCircuitBreakers } from "@tredmail/core/services/circuit-breaker";
+import { BREAKER_WINDOWS_HOURS, checkCircuitBreakers } from "@tredmail/core/services/circuit-breaker";
 import { runDueDomainChecks } from "@tredmail/core/dns/domain-check";
 
 /**
@@ -166,10 +166,16 @@ export async function runHealthChecks(): Promise<Alert[]> {
   const alerts = [...(await deliveryAlerts()), ...(await blocklistAlerts())];
   for (const alert of alerts) await notify(alert);
   // Per-workspace circuit breaker: pauses customers with high bounce or complaint rates
-  const paused = await checkCircuitBreakers().catch((err) => {
-    console.error("[monitor] circuit breaker check failed", err);
-    return [];
-  });
+  // Both windows on every check (every 15 minutes): the 1-hour window catches a burst early
+  const paused: string[] = [];
+  for (const hours of BREAKER_WINDOWS_HOURS) {
+    paused.push(
+      ...(await checkCircuitBreakers(new Date(), hours).catch((err) => {
+        console.error(`[monitor] circuit breaker check (${hours} h) failed`, err);
+        return [];
+      })),
+    );
+  }
   if (paused.length) console.warn(`[monitor] paused sending for ${paused.length} workspace(s): ${paused.join(", ")}`);
   return alerts;
 }

@@ -46,6 +46,8 @@ export interface AdminWorkspace {
     suspended_reason: string | null;
     sending_paused_at: string | null;
     sending_pause_reason: string | null;
+    sending_approved_at: string | null;
+    sending_review_requested_at: string | null;
   };
   members: Array<{ email: string; name: string; role: string }>;
   domains: Array<{ name: string; status: string }>;

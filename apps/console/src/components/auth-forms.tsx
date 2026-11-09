@@ -132,6 +132,17 @@ export function SignUpForm() {
       <Field label="Password" hint="At least 10 characters.">
         <Input type="password" autoComplete="new-password" required minLength={10} value={password} onChange={(e) => setPassword(e.target.value)} />
       </Field>
+      <p className="text-xs text-muted">
+        By creating an account you agree to the{" "}
+        <Link href="/terms" className="font-semibold text-navy underline">
+          Terms of Service
+        </Link>{" "}
+        and the{" "}
+        <Link href="/privacy" className="font-semibold text-navy underline">
+          Privacy Policy
+        </Link>
+        .
+      </p>
       <Button type="submit" className="w-full" loading={loading}>
         Create account
       </Button>

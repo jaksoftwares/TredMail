@@ -28,6 +28,7 @@ import {
 import { reconcilePendingPayments } from "@tredmail/core/billing/service";
 import { ensureBillingAccount, getEntitlements } from "@tredmail/core/billing/subscriptions";
 import { usageSummary } from "@tredmail/core/billing/usage";
+import { approveSending } from "@tredmail/core/services/sending-approval";
 import { requireStaff } from "../middleware/auth.js";
 
 type Failure = { ok: false; statusCode: number; error: string; message: string };
@@ -220,6 +221,8 @@ export async function adminRoutes(fastify: FastifyInstance) {
         suspended_reason: org.suspendedReason,
         sending_paused_at: org.sendingPausedAt?.toISOString() ?? null,
         sending_pause_reason: org.sendingPauseReason,
+        sending_approved_at: org.sendingApprovedAt?.toISOString() ?? null,
+        sending_review_requested_at: org.sendingReviewRequestedAt?.toISOString() ?? null,
       },
       members: org.members.map((m) => ({ email: m.user.email, name: m.user.name, role: m.role })),
       domains: domains.map((d) => ({ name: d.name, status: d.status.toLowerCase() })),
@@ -267,6 +270,13 @@ export async function adminRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: { id: string } }>("/workspaces/:id/resume-sending", async (request, reply) =>
     send(reply, await resumeSending(request.params.id, staffId(request))),
   );
+
+  // POST /v1/admin/workspaces/:id/approve-sending - Lift the unapproved daily limit (H4)
+  fastify.post<{ Params: { id: string } }>("/workspaces/:id/approve-sending", async (request, reply) => {
+    const org = await prisma.organization.findUnique({ where: { id: request.params.id }, select: { id: true } });
+    if (!org) return reply.status(404).send({ statusCode: 404, error: "not_found", message: "Workspace not found." });
+    return send(reply, await approveSending(org.id, staffId(request)));
+  });
 
   // POST /v1/admin/workspaces/:id/credit - Add (or remove, negative) account credit
   fastify.post<{ Params: { id: string } }>("/workspaces/:id/credit", async (request, reply) => {

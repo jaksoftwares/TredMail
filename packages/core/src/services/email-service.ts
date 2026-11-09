@@ -2,7 +2,8 @@ import { prisma, type Domain } from "@tredmail/db";
 import { enqueueEmail, removeQueuedEmail } from "../queue/email.queue.js";
 import { SENDABLE_DOMAIN_STATUSES } from "../delivery/attempts.js";
 import { renderTemplate } from "../mail/template-engine.js";
-import { releaseUsage, reserveUsage } from "../billing/usage.js";
+import { releaseUsage, reserveUsage, usageOnDay } from "../billing/usage.js";
+import { needsSendingApproval } from "./sending-approval.js";
 import { env, PLATFORM_ORG_SLUG } from "../config/env.js";
 import { dispatchWebhookEvent } from "../webhooks/dispatcher.js";
 import {
@@ -295,6 +296,18 @@ export async function prepareSend(
   const standing = await sendingStanding(organizationId);
   if (!standing.ok) return standing;
 
+  // H4: until staff approve a commercial workspace, its own domains may send only a small daily amount
+  if (!testMode && priority !== "SYSTEM" && domain.organizationId === organizationId && needsSendingApproval(standing)) {
+    const today = await usageOnDay(organizationId, new Date());
+    if (today + allRecipients.length > env.UNAPPROVED_DAILY_EMAIL_LIMIT) {
+      return fail(
+        403,
+        "sending_not_approved",
+        `Until this workspace's sending is approved it can send ${env.UNAPPROVED_DAILY_EMAIL_LIMIT.toLocaleString("en-US")} emails a day from its own domains. Request a review in Settings to send more.`,
+      );
+    }
+  }
+
   const attachments = (payload.attachments ?? []).map((a) => {
     const bytes = Buffer.from(a.content, "base64");
     return { filename: a.filename, contentType: a.content_type, contentId: a.content_id, content: bytes, size: bytes.length };
@@ -490,10 +503,20 @@ export async function recordRefusedEmail(
  * Suspended workspaces (staff action) and paused ones (circuit breaker) cannot send. Also
  * returns the workspace's tracking defaults.
  */
-async function sendingStanding(organizationId: string): Promise<{ ok: true; trackOpensDefault: boolean; trackClicksDefault: boolean } | Failure> {
+async function sendingStanding(organizationId: string): Promise<
+  { ok: true; trackOpensDefault: boolean; trackClicksDefault: boolean; isCommercial: boolean; sendingApprovedAt: Date | null } | Failure
+> {
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
-    select: { suspendedAt: true, sendingPausedAt: true, sendingPauseReason: true, trackOpensDefault: true, trackClicksDefault: true },
+    select: {
+      suspendedAt: true,
+      sendingPausedAt: true,
+      sendingPauseReason: true,
+      trackOpensDefault: true,
+      trackClicksDefault: true,
+      isCommercial: true,
+      sendingApprovedAt: true,
+    },
   });
   if (org?.suspendedAt) {
     return fail(403, "workspace_suspended", "This workspace is suspended. Contact Dovepeak Technologies support.");
@@ -501,7 +524,13 @@ async function sendingStanding(organizationId: string): Promise<{ ok: true; trac
   if (org?.sendingPausedAt) {
     return fail(403, "sending_paused", `Sending is paused for this workspace: ${org.sendingPauseReason ?? "unusual bounce or complaint rates"}. Contact support to resume.`);
   }
-  return { ok: true, trackOpensDefault: org?.trackOpensDefault ?? false, trackClicksDefault: org?.trackClicksDefault ?? false };
+  return {
+    ok: true,
+    trackOpensDefault: org?.trackOpensDefault ?? false,
+    trackClicksDefault: org?.trackClicksDefault ?? false,
+    isCommercial: org?.isCommercial ?? false,
+    sendingApprovedAt: org?.sendingApprovedAt ?? null,
+  };
 }
 
 /** Cancels a scheduled email. Once an email is being sent it can no longer be canceled. */

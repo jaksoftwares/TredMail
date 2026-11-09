@@ -475,8 +475,8 @@ All of the following must hold on staging, then be repeated on production before
 - [x] M3 Message-ID claims
 
 **Phase 7:**
-- [ ] H4 sending approval
-- [ ] L3 workspace limit
+- [x] H4 sending approval
+- [x] L3 workspace limit
 
 **Phase 8:**
 - [x] M9 test mode
@@ -720,3 +720,31 @@ Fixes for the audit in `docs/production-gaps.md`, outside the remediation list a
 - **Blank values:** `loadEnv` treats any blank variable as unset, so a copied `.env.example` loads.
 
 The unit suite passes (138 tests), and typecheck and lint are clean.
+
+### Phase 7 (9 November 2026)
+
+Migration `20261111000000_sending_approval`.
+
+- **H4.** Commercial workspaces start unapproved (`sendingApprovedAt`). Until staff approve them,
+  their own domains may send at most `UNAPPROVED_DAILY_EMAIL_LIMIT` recipients a day (default
+  100); above that the send is refused with `sending_not_approved`. Test-key mail and sandbox mail
+  are not limited. The console's Settings page shows the state and a "Request review" button,
+  which notifies staff through the operations alerts once per request. Staff approve a workspace
+  in the back-office (`POST /v1/admin/workspaces/:id/approve-sending`, audited). The circuit
+  breaker now checks two windows on every health check (every 15 minutes): the last hour and the
+  last 24 hours, so a burst is caught early.
+- **L3.** A user may own up to three commercial workspaces until one of them is approved, which
+  lifts the limit for that user (`POST /v1/workspaces` refuses a fourth with
+  `workspace_limit_reached`).
+- Existing commercial workspaces are approved by the migration, so current accounts keep sending.
+- **Legal (item 11).** Draft Terms of Service and Privacy Policy at `/terms` and `/privacy`, linked
+  from the sign-up page and in every legal page's footer. They are drafts: the operator's legal
+  name, registration, addresses, contacts, retention wording, liability cap, refund policy and
+  governing law are in square brackets, and the text needs legal review before launch. The
+  sub-processors listed (Hostinger, Zoho Mail, Safaricom, Google sign-in when enabled, and the
+  backup provider, to be named) come from the deployment documents and must be confirmed.
+
+Verified against a throwaway Postgres (7 checks): the daily limit refuses the over-limit send,
+test mail is not limited, approval lifts the limit and is audited, and the workspace limit
+applies until a workspace is approved. The unit suite (142 tests), typecheck, lint and the console
+typecheck pass.

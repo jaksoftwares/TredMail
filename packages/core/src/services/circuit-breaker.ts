@@ -25,19 +25,24 @@ export interface WorkspaceMailStats {
   complained: number;
 }
 
-export function breakerDecision(stats: WorkspaceMailStats): string | null {
+/** Windows checked on every health check: a sudden burst (1 hour) and the sustained rate (24 hours). */
+export const BREAKER_WINDOWS_HOURS = [1, 24] as const;
+
+const windowLabel = (hours: number) => (hours === 1 ? "the last hour" : "the last 24 hours");
+
+export function breakerDecision(stats: WorkspaceMailStats, hours = 24): string | null {
   const attempted = stats.delivered + stats.hardBounced;
   if (attempted >= MIN_ATTEMPTS_FOR_BOUNCES && stats.hardBounced / attempted > HARD_BOUNCE_LIMIT) {
-    return `${((stats.hardBounced / attempted) * 100).toFixed(1)}% of messages hard-bounced in the last 24 hours (limit ${HARD_BOUNCE_LIMIT * 100}%)`;
+    return `${((stats.hardBounced / attempted) * 100).toFixed(1)}% of messages hard-bounced in ${windowLabel(hours)} (limit ${HARD_BOUNCE_LIMIT * 100}%)`;
   }
   if (stats.delivered >= MIN_DELIVERED_FOR_COMPLAINTS && stats.complained >= MIN_COMPLAINTS && stats.complained / stats.delivered > COMPLAINT_LIMIT) {
-    return `${((stats.complained / stats.delivered) * 100).toFixed(2)}% of delivered messages were reported as spam in the last 24 hours (limit ${(COMPLAINT_LIMIT * 100).toFixed(2)}%)`;
+    return `${((stats.complained / stats.delivered) * 100).toFixed(2)}% of delivered messages were reported as spam in ${windowLabel(hours)} (limit ${(COMPLAINT_LIMIT * 100).toFixed(2)}%)`;
   }
   return null;
 }
 
-export async function checkCircuitBreakers(now = new Date()): Promise<string[]> {
-  const since = new Date(now.getTime() - 24 * 3600_000);
+export async function checkCircuitBreakers(now = new Date(), hours = 24): Promise<string[]> {
+  const since = new Date(now.getTime() - hours * 3600_000);
   const rows = await prisma.$queryRaw<Array<{ organizationId: string; name: string; delivered: bigint; hard: bigint; complained: bigint }>>`
     SELECT e."organizationId", o."name",
       count(*) FILTER (WHERE ev."type" = 'DELIVERED') AS delivered,
@@ -52,7 +57,7 @@ export async function checkCircuitBreakers(now = new Date()): Promise<string[]> 
 
   const paused: string[] = [];
   for (const row of rows) {
-    const reason = breakerDecision({ delivered: Number(row.delivered), hardBounced: Number(row.hard), complained: Number(row.complained) });
+    const reason = breakerDecision({ delivered: Number(row.delivered), hardBounced: Number(row.hard), complained: Number(row.complained) }, hours);
     if (!reason) continue;
     const updated = await prisma.organization.updateMany({
       where: { id: row.organizationId, sendingPausedAt: null },

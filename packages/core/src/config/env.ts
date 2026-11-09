@@ -71,6 +71,9 @@ const envSchema = z
     RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(600),
     // Requests per minute from one IP address across all keys (above any single key's limit)
     RATE_LIMIT_PER_IP_PER_MINUTE: z.coerce.number().int().positive().default(3000),
+    // Until staff approve a commercial workspace (sendingApprovedAt), its own domains may send at
+    // most this many emails a day (recipients counted). Protects the shared sending IP.
+    UNAPPROVED_DAILY_EMAIL_LIMIT: z.coerce.number().int().min(0).default(100),
 
     // TredMail's own sending domain: account emails come from no-reply@ and the sandbox
     // sender is onboarding@. It belongs to the platform workspace and must be DNS-verified.
